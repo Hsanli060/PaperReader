@@ -1,0 +1,18 @@
+# 密钥与配置（绝不提交）
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 本地数据（下载的 PDF、向量库）
+backend/data/
+
+# IDE
+.idea/
+.vscode/
+
+# 系统
+.DS_Store
+Thumbs.db

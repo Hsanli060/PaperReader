@@ -1,0 +1,135 @@
+# ============================================================
+# PaperReader · AI 论文研读助手
+# 基于 LangGraph ReAct Agent + RAG + 多工具协同的学术论文问答系统
+# ============================================================
+
+PaperReader/
+│
+├── backend/                              # ═══════ 后端服务 ═══════
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── config.py                     # 环境变量统一管理（pydantic-settings）
+│   │   │
+│   │   ├── agents/                       # ── 🤖 Agent 核心 ──
+│   │   │   ├── __init__.py
+│   │   │   ├── react_agent.py            #   ReAct Agent 主循环
+│   │   │   ├── tools.py                  #   工具定义（RAG检索/摘要/对比/搜索/引用）
+│   │   │   ├── prompts.py               #   学术场景 System Prompt 模板
+│   │   │   └── memory.py                #   多轮对话记忆（滑动窗口 + 摘要压缩）
+│   │   │
+│   │   ├── rag/                          # ── 📚 RAG 检索增强 ──
+│   │   │   ├── __init__.py
+│   │   │   ├── paper_parser.py           #   学术 PDF 解析（双栏/公式/图表/参考文献）
+│   │   │   ├── splitter.py              #   按论文章节分块（Abstract/Method/Experiment）
+│   │   │   ├── vector_store.py          #   ChromaDB 论文向量库操作
+│   │   │   └── retriever.py             #   跨论文检索 + 论文 ID 过滤 + 跨文档问答
+│   │   │
+│   │   ├── paper/                        # ── 📄 论文服务 ──
+│   │   │   ├── __init__.py
+│   │   │   ├── fetcher.py               #   arXiv API 抓取（元数据 + PDF 下载）
+│   │   │   ├── summarizer.py            #   结构化论文摘要生成（问题/方法/结果/创新/局限）
+│   │   │   └── citation.py             #   引用关系提取 + 有向图构建
+│   │   │
+│   │   ├── api/                          # ── 🌐 API 层 ──
+│   │   │   ├── __init__.py
+│   │   │   ├── main.py                  #   FastAPI 入口（CORS / 中间件注册 / 路由挂载）
+│   │   │   ├── deps.py                  #   依赖注入（获取 DB 会话 / Redis / 当前用户）
+│   │   │   └── routes/
+│   │   │       ├── __init__.py
+│   │   │       ├── auth.py              #   /api/auth（注册 / 登录 / JWT 刷新）
+│   │   │       ├── chat.py              #   /api/chat（SSE 流式论文问答）
+│   │   │       ├── papers.py            #   /api/papers（论文 CRUD / 添加链接 / 上传PDF）
+│   │   │       └── history.py           #   /api/history（对话历史查询 / 删除）
+│   │   │
+│   │   ├── models/                       # ── 📦 数据模型 ──
+│   │   │   ├── __init__.py
+│   │   │   ├── schemas.py               #   Pydantic 请求 / 响应模型
+│   │   │   ├── database.py              #   SQLAlchemy 引擎 + 会话工厂
+│   │   │   └── orm.py                   #   ORM 表定义（User / Paper / Conversation / Message）
+│   │   │
+│   │   ├── middleware/                    # ── 🔧 中间件 ──
+│   │   │   ├── __init__.py
+│   │   │   ├── auth.py                  #   JWT 认证中间件
+│   │   │   ├── error_handler.py         #   全局异常捕获 + 统一错误响应
+│   │   │   └── logging.py              #   结构化请求日志
+│   │   │
+│   │   └── services/                     # ── 🔧 外部服务 ──
+│   │       ├── __init__.py
+│   │       ├── llm.py                   #   LLM 调用封装（OpenAI 兼容）
+│   │       ├── embedding.py             #   Embedding API 调用（DashScope / OpenAI）
+│   │       ├── web_search.py            #   联网搜索 API（Tavily / Bing）
+│   │       └── cache.py                #   Redis 缓存服务（Prompt 级 LLM 响应缓存）
+│   │
+│   ├── alembic/                          # ── 🗃️ 数据库迁移 ──
+│   │   ├── env.py                       #   Alembic 配置
+│   │   ├── script.py.mako              #   迁移脚本模板
+│   │   └── versions/                    #   迁移版本文件
+│   │       └── 001_initial.py           #   初始建表迁移
+│   │
+│   ├── data/                             # ── 📁 本地数据 ──
+│   │   ├── chroma_db/                    #   ChromaDB 持久化目录
+│   │   └── papers/                      #   下载的论文 PDF 存储
+│   │
+│   ├── tests/                            # ── 🧪 测试 ──
+│   │   ├── conftest.py                  #   测试 fixtures（DB / Redis / Mock LLM）
+│   │   ├── test_parser.py              #   PDF 解析准确率测试
+│   │   ├── test_rag.py                 #   RAG 检索测试
+│   │   ├── test_agent.py              #   Agent 工具调用测试
+│   │   └── test_api.py                #   API 接口测试
+│   │
+│   ├── .env.example                      # 环境变量模板
+│   ├── alembic.ini                       # Alembic 配置文件
+│   ├── requirements.txt                  # Python 依赖
+│   └── run.py                            # 后端启动入口
+│
+├── frontend/                             # ═══════ 前端应用 ═══════
+│   ├── src/
+│   │   ├── main.ts                       #   入口文件
+│   │   ├── App.vue                       #   根组件
+│   │   │
+│   │   ├── views/                        # ── 📄 页面视图 ──
+│   │   │   ├── Chat.vue                 #   💬 论文问答聊天（SSE 流式 + LaTeX 渲染）
+│   │   │   ├── Library.vue              #   📚 论文库（卡片列表 / 搜索 / 标签筛选）
+│   │   │   ├── PaperDetail.vue          #   📄 论文详情（自动摘要 + 引用关系图）
+│   │   │   ├── Login.vue                #   🔐 登录 / 注册
+│   │   │   └── History.vue             #   📜 对话历史列表
+│   │   │
+│   │   ├── components/                   # ── 🧩 组件 ──
+│   │   │   ├── MessageBubble.vue        #   消息气泡（LaTeX + 代码高亮 + Markdown）
+│   │   │   ├── ToolCallDetail.vue       #   工具调用过程折叠面板
+│   │   │   ├── PaperCard.vue           #   论文卡片（标题/作者/摘要预览/标签）
+│   │   │   ├── CitationGraph.vue        #   引用关系可视化（D3.js 力导向图）
+│   │   │   ├── FileUploader.vue         #   arXiv URL 输入 + PDF 文件上传
+│   │   │   └── MarkdownRenderer.vue     #   Markdown 渲染（含 KaTeX 公式）
+│   │   │
+│   │   ├── stores/                       # ── 🗃️ 状态管理 ──
+│   │   │   ├── chat.ts                  #   聊天状态（消息列表 / SSE 连接 / 发送）
+│   │   │   ├── paper.ts                #   论文库状态（列表 / 当前论文 / 搜索）
+│   │   │   └── user.ts                 #   用户状态（登录信息 / JWT Token）
+│   │   │
+│   │   ├── services/                     # ── 🔌 接口层 ──
+│   │   │   └── api.ts                   #   Axios 封装（JWT 拦截器 / SSE 工具函数）
+│   │   │
+│   │   ├── types/                        # ── 📦 类型定义 ──
+│   │   │   └── index.ts                #   全局 TypeScript 类型
+│   │   │
+│   │   ├── router/
+│   │   │   └── index.ts                #   Vue Router 路由配置（含登录守卫）
+│   │   │
+│   │   └── styles/
+│   │       └── global.css              #   全局样式 + 学术主题色
+│   │
+│   ├── index.html                        #   HTML 入口
+│   ├── .env.example
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── vite.config.ts
+│
+├── docker-compose.yml                    # 🐳 一键部署（PostgreSQL + Redis + 后端 + 前端）
+├── docs/                                 # 📖 文档
+│   ├── architecture.md                   #   架构设计说明 + Mermaid 图
+│   ├── api.md                           #   API 接口文档
+│   └── development.md                   #   本地开发指南
+├── .gitignore
+├── LICENSE
+└── README.md                             # 项目说明 + 效果截图 + 技术亮点
