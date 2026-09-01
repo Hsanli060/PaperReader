@@ -123,6 +123,7 @@ class ReactAgent:
                             slot["args"] += tc.function.arguments
             content="".join(content_parts)
 
+            # 情况 1：本圈没有工具申请 → 最终回答圈：切片 yield 后收工
             if not calls:
                 answer=content
                 for i in range(0,len(answer),24):
@@ -131,23 +132,30 @@ class ReactAgent:
                 self._memory.add("user",user_input)
                 self._memory.add("assistant",answer)
                 return
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": content,
-                    "tool_calls": [
-                        {"id": slot["id"], "type": "function",
-                         "function": {"name": slot["name"], "arguments": slot["args"]}}
-                        for _, slot in sorted(calls.items())
-                    ],
-                }
-            )
 
-            for _,slot in sorted(calls.items()):
-                result=dispatch(slot["name"],slot["args"])
+            # 情况 2：本圈有工具申请 → 两件事：补申请消息、执行工具
+            # 先把申请排成有序列表（排序只做一次，下面两处共用）
+            tool_calls_list=[
+                {"id":slot["id"],"type":"function",
+                 "function":{"name":slot["name"],"arguments":slot["args"]}}
+                for _,slot in sorted(calls.items())
+            ]
+
+            # 2a. 申请消息进草稿纸（协议要求：tool 结果必须能和某条申请对上号）
+            #     content 是模型的中间自言自语，也要带上保持上下文连贯（可为空串）
+            messages.append({
+                "role":"assistant",
+                "content":content,
+                "tool_calls":tool_calls_list,
+            })
+
+            # 2b. 逐个执行申请，结果按同顺序塞回去
+            for call in tool_calls_list:
+                result=dispatch(call["function"]["name"],call["function"]["arguments"])
                 messages.append({
-                    "role": "tool",
-                    "tool_call_id": slot["id"],
-                    "content": result,
+                    "role":"tool",
+                    "tool_call_id":call["id"],
+                    "content":result,
                 })
+            # 2c. 塞完结果，回到循环开头再调 LLM：它看了结果决定继续要工具还是作答
         yield "（工具调用轮数超出上限，已中止。请换个问法试试）"
