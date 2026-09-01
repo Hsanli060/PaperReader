@@ -1,0 +1,123 @@
+/* ============================================================
+   PaperReader 学术主题 · 全局样式
+   设计取向：安静的纸感底色 + 一个沉稳的强调色（学术蓝绿），
+   长文阅读场景拒绝高饱和背景。
+   ============================================================ */
+
+:root {
+  /* 主题色板 */
+  --color-primary: #0f6e6b;          /* 学术蓝绿：按钮/链接/选中态 */
+  --color-primary-hover: #0d5d5a;
+  --color-bg: #faf9f6;               /* 米白纸感底 */
+  --color-surface: #ffffff;          /* 卡片/气泡白 */
+  --color-text: #26282b;             /* 近黑正文 */
+  --color-text-secondary: #6b7075;   /* 次要灰 */
+  --color-border: #e4e2dd;           /* 分隔线 */
+  --color-accent-amber: #b45309;     /* 强调琥珀：引用块编号 */
+  --color-bubble-user: #e8f3f2;      /* 用户气泡底 */
+  --color-code-bg: #f4f3f0;          /* 行内代码底 */
+
+  /* 字体 */
+  --font-sans: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-bg);
+  font-size: 14px;
+}
+
+/* ---------- 滚动条（webkit 内核浏览器） ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #d4d1cb; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #b8b5ae; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Markdown 渲染区（MessageBubble / 摘要共用） ---------- */
+.md-body {
+  line-height: 1.75;
+  word-break: break-word;
+}
+.md-body p { margin: 0.5em 0; }
+.md-body h1, .md-body h2, .md-body h3 {
+  margin: 1em 0 0.4em;
+  line-height: 1.4;
+}
+.md-body h1 { font-size: 1.25em; }
+.md-body h2 { font-size: 1.12em; }
+.md-body h3 { font-size: 1.05em; }
+.md-body ul, .md-body ol { margin: 0.4em 0; padding-left: 1.6em; }
+.md-body blockquote {
+  margin: 0.6em 0;
+  padding: 0.4em 0.9em;
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-code-bg);
+  color: var(--color-text-secondary);
+  border-radius: 0 6px 6px 0;
+}
+.md-body code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--color-code-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+.md-body pre {
+  background: #2b2e33;
+  color: #e6e6e6;
+  padding: 0.9em 1.1em;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 0.86em;
+}
+.md-body pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  width: 100%;
+}
+.md-body th, .md-body td {
+  border: 1px solid var(--color-border);
+  padding: 0.35em 0.7em;
+  text-align: left;
+}
+.md-body th { background: var(--color-code-bg); }
+.md-body a { color: var(--color-primary); }
+
+/* KaTeX 公式块横向可滚（长公式别撑破气泡） */
+.md-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+
+/* ---------- 打字光标（流式生成中的视觉提示） ---------- */
+.streaming-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--color-primary);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.9s step-start infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---------- 通用卡片 ---------- */
+.pr-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 16px;
+}

@@ -1,7 +1,17 @@
 """
 论文问答路由：/api/chat（SSE 流式）+ /api/history（对话历史，下半课写）
 谁调用它：main.py 挂载
+
+SSE 事件协议（前端唯一要认的格式）：
+    每条 SSE 消息的 data 都是一行 JSON，形状 {"type": "...", ...}：
+      {"type":"content",     "text": "..."}          回答文本片段（打字机）
+      {"type":"tool_call",   "name":..., "arguments":"{...json}"}  模型申请调工具
+      {"type":"tool_result", "name":..., "summary": "..."}     工具执行完成摘要
+    自定义头 X-Conversation-Id：新会话时把后端分配的会话 ID 告诉前端
 """
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, Query,Response
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -80,17 +90,27 @@ def chat(
         db.commit()
         def cached_gen():
             for i in range(0,len(cached),24):
-                yield cached[i:i+24]
+                # 缓存回放也走事件协议（type=content），前端只认一种格式。
+                # 同 gen()：sse_starlette 收到 dict 会当 ServerSentEvent(**data) 解析，
+                # 必须包成 {"event":"message","data":<json 字符串>} 的形状
+                yield {"event":"message","data":json.dumps({"type":"content","text":cached[i:i+24]},ensure_ascii=False)}
         # 注意：自定义头必须通过 EventSourceResponse(headers=...) 传——
         # 它内部新建响应对象，路由参数 response 上写的头会被丢弃
         return EventSourceResponse(cached_gen(),headers={"X-Conversation-Id":str(conversation.id)})
 
     # 4. 未命中：真跑 Agent
-    def gen():
+    async def gen():
         answer_parts=[]
-        for piece in agent.run_stream(data.question):
-            answer_parts.append(piece)
-            yield piece
+        for event in agent.run_stream(data.question):
+            if event["type"]=="content":
+                answer_parts.append(event["text"])
+            # 每个事件转成一行 JSON 推给浏览器：SSE 的约定是
+            # "data: <一行文本>\n\n"，一行文本 = json.dumps(事件字典)
+            yield {"event":"message","data":json.dumps(event,ensure_ascii=False)}
+            # 打字机节奏：24 字符的片段几乎同时到达，视觉上挤成一坨。
+            # content 事件之间插 20ms 间隔，人眼才能看出"字在往外蹦"
+            if event["type"]=="content":
+                await asyncio.sleep(0.02)
         full_answer="".join(answer_parts)
 
         # 5. 流结束才执行到这：问答落库（user 问题 + assistant 回答各一行）

@@ -91,6 +91,17 @@ class ReactAgent:
         return "（工具调用轮数超出上限，已中止。请换个问法试试）"
 
     def run_stream(self,user_input:str):
+        """流式版 run：不吐纯文本，吐"事件字典"。
+
+        和 run() 的区别：run() 等全部跑完给一句话；run_stream() 把过程
+        一件件"直播"出去，谁消费它谁负责把事件转成前端能懂的数据。
+        事件三种（谁消费谁翻译成 JSON 推给浏览器，见 chat.py）：
+            {"type":"tool_call",    "name":..., "arguments":...}   模型申请调工具
+            {"type":"tool_result",  "name":..., "summary":...}      工具执行完（摘要，防爆屏）
+            {"type":"content",      "text":...}                     回答文本片段
+        工具结果不整段 yield（检索结果一条几千字，全推给前端会刷爆屏幕），
+        只推一句摘要；完整结果仍然按协议塞回草稿纸喂给模型。
+        """
         messages=[
             {"role": "system", "content": self.system_prompt},
             *self._memory.history(),
@@ -127,7 +138,7 @@ class ReactAgent:
             if not calls:
                 answer=content
                 for i in range(0,len(answer),24):
-                    yield answer[i:i+24]
+                    yield {"type":"content","text":answer[i:i+24]}
                 # 存记忆
                 self._memory.add("user",user_input)
                 self._memory.add("assistant",answer)
@@ -152,10 +163,17 @@ class ReactAgent:
             # 2b. 逐个执行申请，结果按同顺序塞回去
             for call in tool_calls_list:
                 result=dispatch(call["function"]["name"],call["function"]["arguments"])
+                # 直播：先报"模型要调工具"，再报"工具执行完了"
+                yield {"type":"tool_call",
+                       "name":call["function"]["name"],
+                       "arguments":call["function"]["arguments"]}
+                yield {"type":"tool_result",
+                       "name":call["function"]["name"],
+                       "summary":f"{call['function']['name']} 执行完成，结果 {len(result)} 字符"}
                 messages.append({
                     "role":"tool",
                     "tool_call_id":call["id"],
                     "content":result,
                 })
             # 2c. 塞完结果，回到循环开头再调 LLM：它看了结果决定继续要工具还是作答
-        yield "（工具调用轮数超出上限，已中止。请换个问法试试）"
+        yield {"type":"content","text":"（工具调用轮数超出上限，已中止。请换个问法试试）"}

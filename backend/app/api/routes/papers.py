@@ -18,6 +18,7 @@ from app.models.orm import Paper
 from app.rag.vector_store import delete_paper as vs_delete_paper   # 别名：避免和下面的 delete_papers 重名
 from app.paper.paper_parser import parse_pdf
 from app.rag.splitter import split_paper
+from app.services.cache import llm_cache
 
 
 router = APIRouter(prefix="/papers", tags=["论文"])
@@ -94,7 +95,10 @@ def add_by_arxiv(
     """
     arxiv_id=_extract_arxiv_id(data.arxiv)
 
-    result=db.scalar(select(Paper).where(Paper.arxiv_id==arxiv_id))
+    # 去重只看"自己的库"：同一篇论文别人收藏了不影响我再收藏一份
+    result=db.scalar(
+        select(Paper).where(Paper.user_id==user["user_id"],Paper.arxiv_id==arxiv_id)
+    )
     if result:
         # 已有 → 不重复跑流水线，直接告诉调用方
         return {"id": result.id, "title": result.title, "status": result.status, "duplicated": True}
@@ -130,7 +134,12 @@ def upload_pdf(
         user:dict=Depends(get_current_user),
         db=Depends(get_db),
 )->dict:
-    """上传本地 PDF：存盘 → 登记。状态从 pending 开始"""
+    """上传本地 PDF：存盘 → 登记 → 补跑完整流水线。
+
+    上传的论文如果只登记不索引，Agent 的 search_paper 永远搜不到它
+    （向量库里没有块）——所以这里把 /arxiv 同款的 parse→split→index
+    三步一起跑完，两种入口（链接/上传）产出一致：status=indexed
+    """
     # 1. 简单校验：只认 .pdf 后缀（魔数校验更严但超出本课范围）
     if not (file.filename or "").lower().endswith(".pdf"):
         raise AppException("只接受 PDF 文件", 415)  # 415 Unsupported Media Type
@@ -156,6 +165,14 @@ def upload_pdf(
         status="pending",
     )
     db.add(paper)
+    db.commit()
+
+    # 3. 补流水线：解析 → 切片 → 向量化 → indexed（和 /arxiv 尾部同款）
+    parsed=parse_pdf(paper.pdf_path)
+    chunks=split_paper(text=parsed["text"],headings=parsed["headings"])
+    from app.rag.vector_store import index_paper
+    index_paper(paper_id=paper.id,chunks=chunks)
+    paper.status="indexed"
     db.commit()
     return _paper_to_dict(paper)
 
@@ -183,3 +200,46 @@ def delete_papers(
     db.delete(paper)
     db.commit()
     return{"deleted":paper_id}
+
+# ==================== 论文分析接口（PaperDetail 页用） ====================
+# 这两个接口不走 Agent，而是把 tools.py 里已有的两个工具当普通函数直连：
+# 它们本来就是"输入论文ID → 输出结果"的纯函数，没必要绕一圈 function calling。
+# 结果进 Redis 缓存：同一篇论文反复点开详情页，不用每次都烧 LLM。
+
+@router.get("/{paper_id}/summary")
+def get_paper_summary(
+        paper_id:int,
+        user:dict=Depends(get_current_user),
+        db=Depends(get_db),
+)->dict:
+    """结构化摘要：问题/方法/实验/结论 四段。LLM 生成的结果缓存 1 天。"""
+    _get_own_paper(db,paper_id,user["user_id"])     # 权限闸门：别人的论文 404
+
+    cache_key=f"summary:{paper_id}"
+    cached=llm_cache.get_raw(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    from app.agents.tools import _summarize_paper_tool
+    summary=_summarize_paper_tool(paper_id)         # 直接调工具函数，绕过 dispatch 的 JSON 转字符串
+    llm_cache.set_raw(cache_key,json.dumps(summary,ensure_ascii=False),ttl_seconds=86400)
+    return summary
+
+@router.get("/{paper_id}/citations")
+def get_paper_citations(
+        paper_id:int,
+        user:dict=Depends(get_current_user),
+        db=Depends(get_db),
+)->dict:
+    """引用关系列表：这篇论文引用了谁、各是什么用途。同样缓存 1 天。"""
+    _get_own_paper(db,paper_id,user["user_id"])
+
+    cache_key=f"citations:{paper_id}"
+    cached=llm_cache.get_raw(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    from app.agents.tools import _extract_citations_tool
+    citations=_extract_citations_tool(paper_id)
+    llm_cache.set_raw(cache_key,json.dumps(citations,ensure_ascii=False),ttl_seconds=86400)
+    return {"items":citations}

@@ -73,4 +73,29 @@ class LLMCache:
         except Exception as e:
             logger.warning(f"缓存写入失败（忽略）：{e}")
 
+    # ==================== 通用键值读写（论文分析接口用） ====================
+    # get/set 的键形状是 (paper_id, question)，只服务于问答缓存；
+    # 论文摘要/引用是"一篇论文一份、没有问题维度"的数据，走下面这对自由键方法
+
+    def get_raw(self,key:str)->str|None:
+        """自由键读缓存：键随便起（如 summary:3），命中返回字符串，没命中 None"""
+        r=self._conn()
+        if r is None:
+            return None
+        try:
+            return r.get(key)
+        except Exception as e:
+            logger.warning(f"缓存读取失败（降级直连）：{e}")
+            return None
+
+    def set_raw(self,key:str,value:str,ttl_seconds:int=3600)->None:
+        """自由键写缓存：同样挂了不报错，静默降级"""
+        r=self._conn()
+        if r is None:
+            return
+        try:
+            r.set(key,value,ex=ttl_seconds)
+        except Exception as e:
+            logger.warning(f"缓存写入失败（忽略）：{e}")
+
 llm_cache=LLMCache()

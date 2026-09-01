@@ -8,7 +8,7 @@ ORM 表定义
 """
 
 from datetime import datetime
-from sqlalchemy import String,Text,Integer,ForeignKey,DateTime,func
+from sqlalchemy import String,Text,Integer,ForeignKey,DateTime,UniqueConstraint,func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # Base 定义在 database.py（基建层），这里只做"用基建的人"，避免出现两份 Base
@@ -32,7 +32,11 @@ class Paper(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    arxiv_id:Mapped[str | None]=mapped_column(String(64),unique=True,index=True)
+    arxiv_id:Mapped[str | None]=mapped_column(String(64),index=True)
+    # 同一篇 arXiv 论文允许每个用户各收藏一份（用户隔离的库，去重只在"自己"范围内比较）
+    __table_args__ = (
+        UniqueConstraint("user_id","arxiv_id",name="uq_papers_user_arxiv"),
+    )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     authors: Mapped[str] = mapped_column(Text)  # 存 JSON 字符串，如 '["Alice","Bob"]'
     abstract: Mapped[str | None] = mapped_column(Text)

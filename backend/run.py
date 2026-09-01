@@ -44,7 +44,10 @@ def upsert_paper(db,user:User,meta:dict)->Paper:
     :return: Paper，ORM 对象（已 commit，id 已回填）：
         Paper(id=1, arxiv_id="2312.00752", status="downloaded")
     """
-    result=db.scalars(select(Paper).where(Paper.arxiv_id==meta["arxiv_id"])).first()
+    # demo 种子用户自己范围内去重（和 API 的 /arxiv 同一思路）
+    result=db.scalars(
+        select(Paper).where(Paper.user_id==user.id,Paper.arxiv_id==meta["arxiv_id"])
+    ).first()
     #更新数据
     if result:
         result.title=meta["title"]
