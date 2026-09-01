@@ -4,7 +4,7 @@ run() 一次的流程：组装消息 → 调 LLM → 模型要工具就执行、
 直到模型直接给出回答；草稿纸上的中间消息用完即丢，只有问答本身进记忆
 """
 
-
+import json
 from app.config import settings
 from app.services.llm import client
 from app.agents.prompts import AGENT_SYSTEM_PROMPT
@@ -89,3 +89,65 @@ class ReactAgent:
 
         # 3. 跑满圈数模型还不停：强制中止，别让用户干等
         return "（工具调用轮数超出上限，已中止。请换个问法试试）"
+
+    def run_stream(self,user_input:str):
+        messages=[
+            {"role": "system", "content": self.system_prompt},
+            *self._memory.history(),
+            {"role": "user", "content": user_input},
+        ]
+
+        for rd in range(1,self.max_rounds+1):
+            response=client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                temperature=settings.LLM_TEMPERATURE,
+                messages=messages,
+                tools=TOOLS_SCHEMA,
+                stream=True,
+            )
+            content_parts=[]
+            calls={}
+            for chunk in response:
+                delta=chunk.choices[0].delta
+                if delta.content:
+                    content_parts.append(delta.content)
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        #将调用的函数信息存入字典中
+                        slot=calls.setdefault(tc.index,{"id":"","name":"","args":""})
+                        if tc.id:
+                            slot["id"]=tc.id
+                        if tc.function and tc.function.name:
+                            slot["name"] += tc.function.name
+                        if tc.function and tc.function.arguments:
+                            slot["args"] += tc.function.arguments
+            content="".join(content_parts)
+
+            if not calls:
+                answer=content
+                for i in range(0,len(answer),24):
+                    yield answer[i:i+24]
+                # 存记忆
+                self._memory.add("user",user_input)
+                self._memory.add("assistant",answer)
+                return
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": [
+                        {"id": slot["id"], "type": "function",
+                         "function": {"name": slot["name"], "arguments": slot["args"]}}
+                        for _, slot in sorted(calls.items())
+                    ],
+                }
+            )
+
+            for _,slot in sorted(calls.items()):
+                result=dispatch(slot["name"],slot["args"])
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": slot["id"],
+                    "content": result,
+                })
+        yield "（工具调用轮数超出上限，已中止。请换个问法试试）"

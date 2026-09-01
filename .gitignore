@@ -16,3 +16,7 @@ backend/data/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 临时测试产物
+backend/probe.log
+backend/fake.pdf

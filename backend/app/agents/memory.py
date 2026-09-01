@@ -24,3 +24,8 @@ class ChatMemory:
     def history(self)->list[dict]:
         """取最近消息（OpenAI messages 格式，主循环直接拼进请求）。"""
         return list(self._msgs)     # 拷贝出去，外部改不动窗口本身
+
+    def load_history(self,items:list[dict])->None:
+        """把 DB 里的历史一次性灌进窗口。超出 maxlen 时 deque 自动淘汰最老的。
+        谁调用它：chat 路由（每个请求开始时从 messages 表恢复记忆）"""
+        self._msgs.extend(items)

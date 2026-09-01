@@ -48,5 +48,11 @@ class Settings(BaseSettings):
     #启动时自动读取 backend/.env；extra=ignore：.env 里有多余变量也不报错
     model_config = SettingsConfigDict(env_file=BASE_DIR / ".env",extra="ignore")
 
+    # JWT
+    JWT_SECRET: str  # 签名密钥，无默认值=.env 必须提供
+    JWT_ALGORITHM: str = "HS256"  # 签名算法
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 短期通行证
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 换证凭证
+
 # 全项目唯一的配置实例：其他模块一律 from app.config import settings（和 engine 一样，只建一次）
 settings = Settings()
