@@ -41,7 +41,7 @@ def register(data:RegisterIn,db=Depends(get_db))->dict:
     user=User(username=data.username,password_hash=hash_password(data.password))
     db.add(user)
     db.commit()
-    return {"id":user.id,"username":user.username}      # ← 手误：这句漏了，函数必须有返回值
+    return {"id":user.id,"username":user.username}
 
 @router.post("/login")
 def login(data:LoginIn,db=Depends(get_db))->dict:
