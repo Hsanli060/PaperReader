@@ -2,7 +2,7 @@
 LLM 调用封装（DeepSeek，OpenAI 兼容格式）
 业务代码只 import 这个文件，不直接 import openai —— 换厂商只改这里
 """
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from app.config import settings
 
@@ -16,8 +16,15 @@ SYSTEM_PROMPT="""你是一个专业的学术论文研读助手，帮助用户高
 5. **联网搜索**：搜索论文相关的补充信息（代码仓库、作者主页、后续工作等）
 """
 
-#创建客户端
+#创建客户端（同步版：summarizer / citation / embedding 等非流式调用方还在用，
+#随 FIX-7/9 逐步迁移，一次只动一条链路）
 client=OpenAI(
+    base_url=settings.LLM_BASE_URL,
+    api_key=settings.LLM_API_KEY,
+)
+
+#异步客户端：SSE 聊天流式专用（FIX-4）。事件循环托管，不占线程池
+async_client=AsyncOpenAI(
     base_url=settings.LLM_BASE_URL,
     api_key=settings.LLM_API_KEY,
 )
