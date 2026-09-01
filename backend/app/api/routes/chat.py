@@ -117,7 +117,10 @@ async def chat(
                 yield {"event": "message",
                        "data": json.dumps({"type": "content", "text": cached[i:i+24]}, ensure_ascii=False)}
                 await asyncio.sleep(0.02)   # 回放是本地数据，补个节奏保打字机观感
-        return EventSourceResponse(cached_gen(), headers={"X-Conversation-Id": conv_id_str})
+        # ★ sep="\n"：SSE 消息分隔符用标准 \n\n 而非默认 \r\n\r\n。
+        #   前端手工解析器按 '\n\n' 切消息——默认 \r\n 分隔时消息里没有连续两个 \n，
+        #   永远切不出来 → 气泡"思考中"后什么都不显示（实测踩坑后修正）
+        return EventSourceResponse(cached_gen(), headers={"X-Conversation-Id": conv_id_str}, sep="\n")
 
     # ---- 未命中：真跑 Agent（真流式：delta 到手当场转发） ----
     async def agen():
@@ -158,7 +161,7 @@ async def chat(
                 except Exception:
                     pass  # 断连收尾尽力而为，别再抛错打扰日志
 
-    return EventSourceResponse(agen(), headers={"X-Conversation-Id": conv_id_str})
+    return EventSourceResponse(agen(), headers={"X-Conversation-Id": conv_id_str}, sep="\n")
 
 
 @router.get("/history")

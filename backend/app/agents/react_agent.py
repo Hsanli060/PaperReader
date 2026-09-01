@@ -115,6 +115,7 @@ class ReactAgent:
                             slot["args"] += tc.function.arguments
                         # 新工具首次出现：记下名字，圈结束后按出现顺序直播
                         if tc.index not in new_tool_names:
+                            #{index:{"id": "", "name": "", "args": ""}}
                             new_tool_names.append(tc.index)
 
             content = "".join(content_parts)

@@ -50,5 +50,5 @@ def _parse_json_block(raw: str) -> dict:
     start, end = s.find("{"), s.rfind("}")
     if start != -1 and end > start:
         s = s[start:end+1]
-    # loads：字符串 → Python dict（dumps 是反方向，别搞混）
+    # loads：字符串 → Python dict
     return json.loads(s)
