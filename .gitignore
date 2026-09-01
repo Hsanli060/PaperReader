@@ -9,6 +9,10 @@ __pycache__/
 # 本地数据（下载的 PDF、向量库）
 backend/data/
 
+# 前端构建产物 + 依赖（磁盘上有，git 不追踪）
+frontend/dist/
+frontend/node_modules/
+
 # IDE
 .idea/
 .vscode/
