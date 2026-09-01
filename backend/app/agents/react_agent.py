@@ -17,10 +17,12 @@ Agent 主循环（手写 function calling loop）——异步流式版（FIX-1/F
 
 关键设计（两条铁律）：
     1. 真流式：最终回答圈的 delta.content 到手【当场 yield】，不攒完再吐
-    2. async 上下文里所有同步 I/O 一律 asyncio.to_thread 包住：
-       dispatch（内部有 ChromaDB 同步查询、LLM 同步调用、httpx 同步下载）、
-       memory.add（内部有同步 SQLAlchemy 写入）——不包的话事件循环被占死，
-       第二个并发请求的首 token 会被第一个请求的工具执行拖延（并发验收必挂）
+    2. async 上下文里所有同步 I/O 一律处理：
+       - memory.add（同步 SQLAlchemy）→ asyncio.to_thread 包住
+       - dispatch 已是 async（工具链全异步：AsyncOpenAI LLM 调用、
+         ddgs 搜索 to_thread）→ 直接 await，不再占线程池
+       不包/不 await 的话事件循环被占死，第二个并发请求的首 token 会被
+       第一个请求的工具执行拖延（并发验收必挂）
 """
 
 import asyncio
@@ -148,9 +150,9 @@ class ReactAgent:
                 # 直播：先报"模型要调工具"（工具面板亮起的时机）
                 yield {"type": "tool_call", "name": name, "arguments": args}
 
-                # ★ dispatch 是同步的（内部含 ChromaDB 同步查询 / LLM 调用 / httpx），
-                #   to_thread 丢线程池执行，工具跑 10-30 秒期间事件循环继续服务其他请求
-                result = await asyncio.to_thread(dispatch, name, args)
+                # ★ dispatch 已 async 化（工具链全异步：LLM 走 AsyncOpenAI、
+                #   ddgs 内部 to_thread），直接 await，非阻塞等待不占线程池
+                result = await dispatch(name, args)
 
                 # 直播：工具执行完（摘要，防爆屏）
                 yield {"type": "tool_result",

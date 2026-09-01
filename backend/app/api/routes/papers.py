@@ -205,9 +205,11 @@ def delete_papers(
 # 这两个接口不走 Agent，而是把 tools.py 里已有的两个工具当普通函数直连：
 # 它们本来就是"输入论文ID → 输出结果"的纯函数，没必要绕一圈 function calling。
 # 结果进 Redis 缓存：同一篇论文反复点开详情页，不用每次都烧 LLM。
+# 异步化注：工具函数已是 async（LLM 走 AsyncOpenAI），路由 await 它——
+# 30-60s 的 LLM 生成期间不再占线程池一个线程；同步 DB 小操作保持原样（快）
 
 @router.get("/{paper_id}/summary")
-def get_paper_summary(
+async def get_paper_summary(
         paper_id:int,
         user:dict=Depends(get_current_user),
         db=Depends(get_db),
@@ -221,12 +223,12 @@ def get_paper_summary(
         return json.loads(cached)
 
     from app.agents.tools import _summarize_paper_tool
-    summary=_summarize_paper_tool(paper_id)         # 直接调工具函数，绕过 dispatch 的 JSON 转字符串
+    summary=await _summarize_paper_tool(paper_id)   # 异步工具：await 直接等，不占线程
     llm_cache.set_raw(cache_key,json.dumps(summary,ensure_ascii=False),ttl_seconds=86400)
     return summary
 
 @router.get("/{paper_id}/citations")
-def get_paper_citations(
+async def get_paper_citations(
         paper_id:int,
         user:dict=Depends(get_current_user),
         db=Depends(get_db),
@@ -240,6 +242,6 @@ def get_paper_citations(
         return json.loads(cached)
 
     from app.agents.tools import _extract_citations_tool
-    citations=_extract_citations_tool(paper_id)
+    citations=await _extract_citations_tool(paper_id)
     llm_cache.set_raw(cache_key,json.dumps(citations,ensure_ascii=False),ttl_seconds=86400)
     return {"items":citations}

@@ -22,22 +22,22 @@ def collect_events(coro_gen) -> list[dict]:
     return asyncio.run(_collect())
 
 
-# ---------- dispatch：错误分支（不调 LLM） ----------
+# ---------- dispatch：错误分支（不调 LLM；dispatch 已 async，用 asyncio.run 收集） ----------
 def test_dispatch_unknown_tool_returns_error_text():
     """调不存在的工具：返回错误说明文字而不是抛异常（模型下轮能自我修正的前提）"""
-    r = dispatch("no_such_tool", "{}")
+    r = asyncio.run(dispatch("no_such_tool", "{}"))
     assert r.startswith("错误"), f"应返回错误说明，实际: {r[:100]}"
     assert "search_paper" in r  # 错误消息里应列出可用工具
 
 def test_dispatch_bad_json_returns_error_text():
     """坏 JSON 参数：不炸，返回错误说明"""
-    r = dispatch("search_paper", '{"query": bad json}')
+    r = asyncio.run(dispatch("search_paper", '{"query": bad json}'))
     assert r.startswith("工具执行失败"), f"应返回错误说明，实际: {r[:100]}"
 
 # ---------- 工具真实执行（走真 RAG，不调 LLM） ----------
 def test_search_paper_tool_returns_hits():
     """search_paper 工具：真实检索，字段齐全、distance 保留 3 位"""
-    r = dispatch("search_paper", '{"query": "selective state space"}')
+    r = asyncio.run(dispatch("search_paper", '{"query": "selective state space"}'))
     hits = json.loads(r)
     assert len(hits) == 5
     for h in hits:
