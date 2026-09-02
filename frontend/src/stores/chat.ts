@@ -6,6 +6,7 @@
  *      不能改闭包里存下来的原始对象（见 sendMessage 里的注释）
  *   2. 停止生成 —— AbortController，点了停止就 abort()，流读取立即中断
  *   3. 会话切换 —— X-Conversation-Id 响应头 + history 接口回放
+ *   4. FIX-3' scope：scopeIds 数组（NotebookLM 式源选择），空数组=全库
  */
 
 import { defineStore } from 'pinia'
@@ -29,18 +30,39 @@ export const useChatStore = defineStore('chat', {
     /** 中断控制器：停止生成用 */
     _abort: null as AbortController | null,
 
-    /** 聊天范围：null=全库问答；数字=限定这篇论文 */
-    paperScope: null as number | null,
+    /** 聊天范围（FIX-3' 多选）：空数组=全库；非空=只在这几篇论文里检索 */
+    scopeIds: [] as number[],
+
+    /** @deprecated 兼容旧代码：单篇 scope 的别名（读 scopeIds[0]，写覆盖 scopeIds） */
+    _legacyPaperScope: null as number | null,
   }),
 
+  getters: {
+    /** 兼容 Library.vue 等旧调用：paperScope 单值别名 */
+    paperScope(state): number | null {
+      return state.scopeIds[0] ?? state._legacyPaperScope ?? null
+    },
+  },
+
   actions: {
+    /** 设置单篇 scope（Library “去问它”用） */
+    setPaperScope(id: number | null) {
+      if (id === null) this.scopeIds = []
+      else this.scopeIds = [id]
+      this._legacyPaperScope = id
+    },
+
+    /** 设置多篇 scope（Chat.vue 多选面板用） */
+    setScopeIds(ids: number[]) {
+      this.scopeIds = [...ids]
+      this._legacyPaperScope = ids[0] ?? null
+    },
+
     /** 发送一条消息：先挤进一条用户气泡，再开 SSE 流攒回答 */
     async send(question: string): Promise<void> {
       if (this.streaming || !question.trim()) return
-
       // 1. 用户气泡立刻上屏（不等网络）
       this.messages.push({ role: 'user', content: question })
-
       // 2. 预置一个空的 assistant 气泡占位，流式往里灌字
       //    注意：这里取的 raw 变量是刚 push 的原始对象；渲染层拿到的是
       //    Vue 包过的响应式代理。下面回调里必须用 msgs[msgs.length-1]
@@ -58,7 +80,7 @@ export const useChatStore = defineStore('chat', {
           '/api/chat',
           {
             question,
-            paper_id: this.paperScope,
+            paper_ids: this.scopeIds.length ? this.scopeIds : null,
             // 0 转成 null：让后端新建会话
             conversation_id: this.conversationId || null,
           },
@@ -114,7 +136,10 @@ export const useChatStore = defineStore('chat', {
     async loadConversation(conversationId: number): Promise<void> {
       const resp = await http.get<ConversationDetail>(`/history/${conversationId}`)
       this.conversationId = resp.data.id
-      this.paperScope = resp.data.paper_id
+      // FIX-3'：后端返回 paper_ids 列表，前端据此恢复多选勾选
+      const ids = (resp.data as any).paper_ids ?? ((resp.data as any).paper_id ? [(resp.data as any).paper_id] : [])
+      this.scopeIds = ids
+      this._legacyPaperScope = ids[0] ?? null
       // 历史消息转成展示消息（没有工具调用过程可回放——后端只落库最终文本）
       this.messages = resp.data.messages.map((m) => ({
         role: m.role,

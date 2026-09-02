@@ -66,9 +66,9 @@ function toDetail(id: number) {
   router.push(`/paper/${id}`)
 }
 
-/** 去问它：把范围带到聊天页 */
+/** 去问它：把范围带到聊天页（FIX-3' 多选 scope） */
 function toChat(id: number) {
-  chatStore.paperScope = id
+  chatStore.setScopeIds([id])
   router.push('/chat')
 }
 </script>

@@ -74,7 +74,7 @@ async function remove(c: Conversation) {
             <div class="row-title">{{ c.title }}</div>
             <div class="row-meta">
               {{ c.created_at.slice(0, 16) }} · {{ c.message_count }} 条消息
-              <span v-if="c.paper_id" class="paper-tag">论文 #{{ c.paper_id }}</span>
+              <span v-if="c.paper_ids?.length" class="paper-tag">限定 {{ c.paper_ids.length }} 篇</span>
             </div>
           </div>
           <div class="row-actions">

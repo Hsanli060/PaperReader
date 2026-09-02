@@ -58,19 +58,15 @@ class ReactAgent:
         """取最近消息（OpenAI messages 格式）"""
         return self._memory.history()
 
-    async def run_stream_async(self, user_input: str) -> AsyncIterator[dict]:
+    async def run_stream_async(self, user_input: str, allowed_paper_ids: list[int] | None = None) -> AsyncIterator[dict]:
         """流式主循环：不吐纯文本，吐"事件字典"。
-
-        一个 async 生成器，谁消费谁负责把事件转成前端能懂的数据。
-        每圈：流式调 LLM（AsyncOpenAI, stream=True）→
-            - delta.content 到手当场 yield（真流式，不攒完再吐）
-            - delta.tool_calls 按 index 分槽累积（id/name/arguments 逐片拼）
-        圈结束：有工具申请 → 补申请消息、执行工具（to_thread）、结果回填 → 下一圈
-                没有工具申请 → 已逐字吐完，收工落记忆
-
         :param user_input: (str) 用户这轮说的话
+        :param allowed_paper_ids: (list[int]|None) 会话 scope——检索只允许落在这几篇论文里。
+            ★ 由服务端注入（chat.py 从 conversation_papers 查出来传进来），
         :yields: (dict) 事件字典，三种类型见文件头注释
         """
+        # scope 存实例属性，dispatch 时由 execute 工具方法读取（避免改 dispatch 全局签名）
+        self._allowed_paper_ids = allowed_paper_ids
         # 1. 组装消息列表（草稿纸）：system + 历史 + 新问题
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -152,8 +148,7 @@ class ReactAgent:
                 yield {"type": "tool_call", "name": name, "arguments": args}
 
                 # ★ dispatch 已 async 化（工具链全异步：LLM 走 AsyncOpenAI、
-                #   ddgs 内部 to_thread），直接 await，非阻塞等待不占线程池
-                result = await dispatch(name, args)
+                result = await dispatch(name, args, allowed_paper_ids=self._allowed_paper_ids)
 
                 # 直播：工具执行完（摘要，防爆屏）
                 yield {"type": "tool_result",

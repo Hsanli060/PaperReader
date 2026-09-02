@@ -23,4 +23,11 @@ Thumbs.db
 
 # 临时测试产物
 backend/probe.log
-backend/fake.pdf
+
+# Claude Code 任务书（本地协作产物，不进仓库）
+CLAUDE.md
+CLAUDE_APPEND.md
+
+# 一次性脚本与备份
+backend/scripts/
+backups/

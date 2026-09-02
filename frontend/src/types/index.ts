@@ -27,8 +27,8 @@ export interface CurrentUser {
 
 // ---------- 论文 ----------
 
-/** 论文生命周期：pending(刚登记) → downloaded(PDF到手) → parsed(解析成md) → indexed(进向量库) */
-export type PaperStatus = 'pending' | 'downloaded' | 'parsed' | 'indexed'
+/** 论文生命周期：pending(刚登记) → downloaded(PDF到手) → parsed(解析成md) → indexed(进向量库) → failed(流水线出错) */
+export type PaperStatus = 'pending' | 'downloaded' | 'parsed' | 'indexed' | 'failed'
 
 /** /api/papers 列表和详情里的单篇论文。authors 在库里存 JSON 字符串，后端已解析成数组 */
 export interface Paper {
@@ -39,10 +39,12 @@ export interface Paper {
   abstract: string | null
   pdf_path: string | null
   status: PaperStatus
+  last_error: string | null  // failed 时的错误信息（徽章 tooltip 用）
+  added_by: number | null    // 谁添加的（署名展示，不做隔离）
   created_at: string
 }
 
-/** POST /api/papers/arxiv 的返回（duplicated=true 表示"我的库里已经有了"） */
+/** POST /api/papers/arxiv 的返回（duplicated=true 表示"库里已经有了"） */
 export interface PaperAddResult extends Paper {
   duplicated: boolean
 }
@@ -72,11 +74,11 @@ export interface Citation {
 
 // ---------- 会话与消息 ----------
 
-/** /api/history 列表里的一条会话 */
+/** /api/history 列表里的一条会话（FIX-3'：paper_ids 多选 scope，空数组=全库） */
 export interface Conversation {
   id: number
   title: string
-  paper_id: number | null
+  paper_ids: number[]   // 问答范围（NotebookLM 式源选择）
   message_count: number
   created_at: string
 }
@@ -85,7 +87,7 @@ export interface Conversation {
 export interface ConversationDetail {
   id: number
   title: string
-  paper_id: number | null
+  paper_ids: number[]   // 同上，前端据此恢复 scope 勾选
   messages: HistoryMessage[]
 }
 

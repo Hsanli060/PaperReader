@@ -4,31 +4,42 @@
  *
  * 三块职责：
  *   1. 会话侧边栏：列出历史会话，点一条 = 载入回放并继续聊；"新会话"清屏
- *   2. 消息流：chat store 的 messages → MessageBubble；流式时自动滚到底
- *   3. 输入框：Enter 发送 / Shift+Enter 换行；流式中显示"停止生成"
+ *   2. 问答范围（FIX-3'）：多选 checkbox 列表（NotebookLM 式源选择），空=全库
+ *   3. 消息流：chat store 的 messages → MessageBubble；流式时自动滚到底
  */
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useChatStore } from '@/stores/chat'
+import { usePaperStore } from '@/stores/paper'
 import MessageBubble from '@/components/MessageBubble.vue'
 import type { Conversation } from '@/types'
 
 const chat = useChatStore()
+const paperStore = usePaperStore()
 const input = ref('')
 const listRef = ref<HTMLElement | null>(null)
 
-/** 范围选择：all=全库；数字=限定某篇论文（从 Library"去问它"跳来时带上） */
-const scope = ref<'all' | number>('all')
-
 onMounted(() => {
   chat.fetchConversations()
-  // Library 页跳过来时可能带上了 paperScope
-  if (chat.paperScope !== null) scope.value = chat.paperScope
+  paperStore.fetchPage(1)
 })
 
-function switchScope(v: 'all' | number) {
-  scope.value = v
-  chat.paperScope = v === 'all' ? null : v
-  chat.newConversation()   // 换范围 = 上下文完全不同，开新会话最干净
+/** 多选 scope：勾中的论文 id 列表 */
+const scopeIds = computed({
+  get: () => chat.scopeIds,
+  set: (v: number[]) => chat.setScopeIds(v),
+})
+
+function toggleScope(id: number) {
+  const next = scopeIds.value.includes(id)
+    ? scopeIds.value.filter((x) => x !== id)
+    : [...scopeIds.value, id]
+  chat.setScopeIds(next)
+  chat.newConversation() // 换范围 = 上下文完全不同，开新会话最干净
+}
+
+function clearScope() {
+  chat.setScopeIds([])
+  chat.newConversation()
 }
 
 function send() {
@@ -75,15 +86,16 @@ function fmtTime(s: string) {
     <aside class="conv-sidebar">
       <button class="new-chat-btn" @click="newChat">＋ 新会话</button>
       <div class="scope-box">
-        <div class="scope-label">问答范围</div>
+        <div class="scope-label">问答范围 <span v-if="scopeIds.length" class="scope-count">已选 {{ scopeIds.length }}</span></div>
         <label class="scope-item">
-          <input type="radio" value="all" :checked="scope === 'all'" @change="switchScope('all')" />
+          <input type="checkbox" :checked="scopeIds.length === 0" @change="clearScope()" />
           全库检索
         </label>
-        <label v-if="chat.paperScope !== null" class="scope-item">
-          <input type="radio" :value="chat.paperScope" :checked="scope !== 'all'" disabled />
-          限定论文 #{{ chat.paperScope }}
+        <label v-for="p in paperStore.items" :key="p.id" class="scope-item">
+          <input type="checkbox" :checked="scopeIds.includes(p.id)" @change="toggleScope(p.id)" />
+          <span class="scope-title" :title="p.title">{{ p.title.slice(0, 28) }}{{ p.title.length > 28 ? '…' : '' }}</span>
         </label>
+        <div v-if="!paperStore.items.length" class="scope-empty">论文库为空</div>
       </div>
       <div class="conv-list">
         <div
@@ -94,7 +106,7 @@ function fmtTime(s: string) {
           @click="openConversation(c)"
         >
           <div class="conv-title">{{ c.title }}</div>
-          <div class="conv-meta">{{ fmtTime(c.created_at) }} · {{ c.message_count }} 条</div>
+          <div class="conv-meta">{{ fmtTime(c.created_at) }} · {{ c.message_count }} 条<template v-if="c.paper_ids?.length"> · 限定 {{ c.paper_ids.length }} 篇</template></div>
         </div>
         <div v-if="!chat.conversations.length" class="conv-empty">还没有会话</div>
       </div>
@@ -133,7 +145,6 @@ function fmtTime(s: string) {
 
 <style scoped>
 .chat-page { display: flex; height: calc(100vh - 48px); }
-
 /* ---- 侧边栏 ---- */
 .conv-sidebar {
   width: 250px;
@@ -157,8 +168,11 @@ function fmtTime(s: string) {
 .scope-box {
   padding: 0 12px 10px;
   border-bottom: 1px solid var(--color-border);
+  max-height: 40vh;
+  overflow-y: auto;
 }
 .scope-label { font-size: 11px; color: var(--color-text-secondary); margin-bottom: 6px; }
+.scope-count { color: var(--color-primary); }
 .scope-item {
   display: flex;
   align-items: center;
@@ -167,7 +181,8 @@ function fmtTime(s: string) {
   padding: 3px 0;
   cursor: pointer;
 }
-.scope-item input:disabled { accent-color: var(--color-amber, #b45309); }
+.scope-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scope-empty { font-size: 11px; color: var(--color-text-secondary); padding: 4px 0; }
 
 .conv-list { flex: 1; overflow-y: auto; padding: 8px; }
 .conv-item {

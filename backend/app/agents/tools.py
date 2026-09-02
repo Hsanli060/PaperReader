@@ -1,5 +1,5 @@
 """
-Agent 工具注册表：函数 + JSON Schema + dispatch（异步版）
+Agent 工具注册表：函数 + JSON Schema + dispatch
 
 异步化注（与 react_agent/llm.py 的 FIX 收敛配套）：
     - 所有工具函数都是 async def：内部所有同步 I/O 一律 to_thread 包住
@@ -19,16 +19,25 @@ from app.paper.summarizer import summarize_paper
 from app.paper.citation import extract_citations
 
 
-async def _search_paper(query: str, paper_id: int | None = None) -> list[dict]:
+async def _search_paper(query: str, paper_id: int | None = None,
+                        allowed_paper_ids: list[int] | None = None) -> list[dict]:
     """知识库检索：去向量库找和检索词最相关的论文块。
 
     :param query: (str) 检索词
-    :param paper_id: (int) 只查这篇论文；None = 全库
+    :param paper_id: (int) 只查这篇论文（LLM 可传，用于指向它想问的论文）
+    :param allowed_paper_ids: (list[int]|None) 会话 scope（服务端注入，LLM 不可见）——
+        传入时检索被强制圈在这些论文里；paper_id 越出 scope 会被拒绝
     :return: list[dict]，给模型看的瘦身版检索结果
     """
+    # scope 安全校验：LLM 传的 paper_id 必须落在服务端圈定的范围内
+    if allowed_paper_ids is not None and paper_id is not None and paper_id not in allowed_paper_ids:
+        raise ValueError(f"paper_id={paper_id} 不在当前问答范围内（范围：{allowed_paper_ids}），请改用范围内的论文 ID")
     # rag_search 是同步的（内含 embedding API 网络调用 + ChromaDB 查询），
     # 按铁律 to_thread 丢线程池，检索期间事件循环继续服务其他请求
-    hits = await asyncio.to_thread(rag_search, query, paper_id=paper_id)
+    hits = await asyncio.to_thread(
+        rag_search, query,
+        paper_id=paper_id, paper_ids=allowed_paper_ids,
+    )
     return [
         {
             "paper_id": h["paper_id"],
@@ -50,8 +59,12 @@ async def _web_search_tool(query: str, max_results: int = 5) -> list[dict]:
     return await asyncio.to_thread(_web_search, query, max_results=max_results)
 
 
-async def _summarize_paper_tool(paper_id: int) -> dict:
+async def _summarize_paper_tool(paper_id: int,
+                                allowed_paper_ids: list[int] | None = None) -> dict:
     """结构化总结一篇论文：先从向量库抓该论文的块拼成原材料，再让 LLM 加工。"""
+    # scope 安全校验：总结也只许落在服务端圈定的范围内
+    if allowed_paper_ids is not None and paper_id not in allowed_paper_ids:
+        raise ValueError(f"paper_id={paper_id} 不在当前问答范围内（范围：{allowed_paper_ids}）")
     # 原材料质量决定摘要质量：检索词必须是"正文核心话题"而不是裸词 "paper"
     hits = await asyncio.to_thread(
         rag_search,
@@ -64,7 +77,11 @@ async def _summarize_paper_tool(paper_id: int) -> dict:
     return await summarize_paper(text)          # AsyncOpenAI，非阻塞等待
 
 
-async def _extract_citations_tool(paper_id: int) -> list[dict]:
+async def _extract_citations_tool(paper_id: int,
+                                  allowed_paper_ids: list[int] | None = None) -> list[dict]:
+    # scope 安全校验：引用提取同样受会话范围约束
+    if allowed_paper_ids is not None and paper_id not in allowed_paper_ids:
+        raise ValueError(f"paper_id={paper_id} 不在当前问答范围内（范围：{allowed_paper_ids}）")
     hits = await asyncio.to_thread(
         rag_search, query="references bibliography introduction", paper_id=paper_id, top_k=10
     )
@@ -172,11 +189,14 @@ TOOLS_IMPLS: dict = {
 }
 
 
-async def dispatch(name: str, arguments: str) -> str:
+async def dispatch(name: str, arguments: str,
+                   allowed_paper_ids: list[int] | None = None) -> str:
     """执行一次工具调用（异步版）：找到工具 → 解析参数 → await 调用 → 结果转 JSON 字符串。
 
     :param name: (str) 模型要调用的工具名，如 "search_paper"
     :param arguments: (str) 模型给的参数，实测是 JSON 字符串如 '{"query": "..."}'，不是 dict
+    :param allowed_paper_ids: (list[int]|None) 会话 scope（服务端注入，LLM 不可见）。
+        只注入给声明了该参数的工具——web_search 等无 scope 概念的工具不收
     :return: (str) 工具结果的 JSON 字符串；出错时不抛异常，
         而是返回错误说明文字 —— 模型下轮读到会自己修正参数重试，
         比直接崩掉主循环好
@@ -186,6 +206,12 @@ async def dispatch(name: str, arguments: str) -> str:
         return f"错误：没有叫 {name!r} 的工具，可用工具：{list(TOOLS_IMPLS)}"
     try:
         args = json.loads(arguments) if arguments else {}     # 反序列化参数
+        # scope 注入：只有函数签名里有 allowed_paper_ids 的工具才收
+        # （inspect 按需注入，不污染无 scope 概念的工具）
+        if allowed_paper_ids is not None:
+            import inspect as _inspect
+            if "allowed_paper_ids" in _inspect.signature(tool).parameters:
+                args["allowed_paper_ids"] = allowed_paper_ids
         result = await tool(**args)
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:

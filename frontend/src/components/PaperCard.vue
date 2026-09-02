@@ -14,12 +14,13 @@ const emit = defineEmits<{
   (e: 'delete', id: number): void
 }>()
 
-/** 状态徽章的文案和颜色 */
-const STATUS_META: Record<string, { label: string; color: string }> = {
-  pending: { label: '待处理', color: '#9ca3af' },
-  downloaded: { label: '已下载', color: '#b45309' },
-  parsed: { label: '已解析', color: '#2563eb' },
+/** 状态徽章的文案和颜色（FIX-2 增加 failed） */
+const STATUS_META: Record<string, { label: string; color: string; pulse?: boolean }> = {
+  pending: { label: '处理中', color: '#9ca3af', pulse: true },
+  downloaded: { label: '已下载', color: '#b45309', pulse: true },
+  parsed: { label: '已解析', color: '#2563eb', pulse: true },
   indexed: { label: '已索引', color: '#0f6e6b' },
+  failed: { label: '失败', color: '#dc2626' },
 }
 const statusMeta = computed(() => STATUS_META[props.paper.status] ?? STATUS_META.pending)
 
@@ -37,18 +38,26 @@ const abstractText = computed(() => props.paper.abstract ?? '（无摘要——�
 <template>
   <div class="paper-card pr-card">
     <div class="card-head">
-      <span class="status-badge" :style="{ background: statusMeta.color }">{{ statusMeta.label }}</span>
+      <span
+        class="status-badge"
+        :class="{ pulse: statusMeta.pulse }"
+        :style="{ background: statusMeta.color }"
+        :title="paper.last_error ?? undefined"
+      >{{ statusMeta.label }}</span>
       <span v-if="paper.arxiv_id" class="arxiv-id">arXiv:{{ paper.arxiv_id }}</span>
       <span class="head-actions">
         <button class="mini-btn" title="查看详情" @click="emit('detail', paper.id)">详情</button>
         <button class="mini-btn" title="针对这篇论文提问" @click="emit('chat', paper.id)">去问它</button>
-        <button class="mini-btn danger" title="从我的库删除" @click="emit('delete', paper.id)">删除</button>
+        <button class="mini-btn danger" title="删除" @click="emit('delete', paper.id)">删除</button>
       </span>
     </div>
 
     <h3 class="card-title" @click="emit('detail', paper.id)">{{ paper.title }}</h3>
     <div class="card-authors">{{ authorText }} · {{ paper.created_at.slice(0, 10) }}</div>
     <p class="card-abstract">{{ abstractText }}</p>
+    <div v-if="paper.status === 'failed' && paper.last_error" class="error-hint" :title="paper.last_error">
+      ❌ {{ paper.last_error.slice(0, 80) }}
+    </div>
   </div>
 </template>
 
@@ -61,6 +70,8 @@ const abstractText = computed(() => props.paper.abstract ?? '（无摘要——�
   padding: 2px 8px;
   border-radius: 10px;
 }
+.status-badge.pulse { animation: badge-pulse 1.2s ease-in-out infinite; }
+@keyframes badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .arxiv-id {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -97,4 +108,5 @@ const abstractText = computed(() => props.paper.abstract ?? '（无摘要——�
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.error-hint { font-size: 11px; color: #dc2626; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

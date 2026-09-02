@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 
-from fastapi import APIRouter, Depends, Query, UploadFile, File
+from fastapi import APIRouter, Depends, Query, UploadFile, File, BackgroundTasks
 from sqlalchemy import select, func
 from pydantic import BaseModel,Field
 
@@ -37,14 +37,16 @@ def _paper_to_dict(p:Paper)->dict:
         "authors":json.loads(p.authors) if p.authors else [],
         "abstract":p.abstract,
         "pdf_path":p.pdf_path,
-        "status": p.status,  # pending → downloaded → parsed → indexed 的生命周期
+        "status": p.status,      # pending → downloaded → parsed → indexed（FIX-2 后台推进）
+        "last_error": p.last_error,  # 流水线失败原因（failed 徽章的提示文本）
+        "added_by": p.added_by,      # 谁添加的（署名展示，不做隔离）
         "created_at": str(p.created_at),
     }
 
-def _get_own_paper(db,paper_id:int,user_id:int)->Paper:
-    """查"我的"论文，查不到/不是我的统一报 404。"""
+def _get_paper(db,paper_id:int)->Paper:
+    """查论文（全局共享库：只查存在性，不再按用户过滤）。查不到统一 404。"""
     paper=db.get(Paper,paper_id)
-    if paper is None or paper.user_id!=user_id:
+    if paper is None:
         raise AppException("论文不存在", 404)
     return paper
 
@@ -63,12 +65,11 @@ def list_papers(
     user:dict=Depends(get_current_user),
     db=Depends(get_db),
 )->dict:
-    """分页列出我的论文。
+    """分页列出论文库（FIX-3'：全局共享库，全员可见）。
 
     :return: {"total": 总数, "page": 当前页, "page_size": 每页几条, "items": [...]}
     """
-    #查询该用户存储的所有论文（键名是 user_id，对齐 deps.py 里 get_current_user 的返回）
-    base=select(Paper).where(Paper.user_id==user["user_id"])
+    base=select(Paper)
     total=db.scalar(select(func.count()).select_from(base.subquery()))
 
     #当前页的论文
@@ -84,61 +85,116 @@ def list_papers(
         "items":[_paper_to_dict(p) for p in rows]
     }
 
+# ---- FIX-2：后台流水线（BackgroundTasks，不引 Celery——单机场景够用且少一个外部依赖） ----
+def _run_pipeline_background(paper_id:int, db_factory, pdf_path:str|None=None):
+    """后台跑 fetch之后的所有步骤：parse → split → index，每步推进 status。
+    db_factory：SessionLocal（后台任务不能复用请求的 session——请求结束它就关了）
+    """
+    from app.models.database import SessionLocal
+    from app.rag.vector_store import index_paper
+    db = SessionLocal()
+    try:
+        paper = db.get(Paper, paper_id)
+        if paper is None:
+            return
+        try:
+            # parse
+            parsed = parse_pdf(pdf_path or paper.pdf_path)
+            paper.status = "parsed"
+            db.commit()
+            # split + index
+            chunks = split_paper(text=parsed["text"], headings=parsed["headings"])
+            index_paper(paper_id=paper.id, chunks=chunks)
+            paper.status = "indexed"
+            paper.last_error = None
+            db.commit()
+        except Exception as e:
+            paper.status = "failed"
+            paper.last_error = f"{type(e).__name__}: {e}"[:500]
+            db.commit()
+    finally:
+        db.close()
+
+
+def _fetch_and_mark_downloaded(paper_id:int, arxiv_id:str):
+    """后台第一步：下载 PDF + 抓元数据，落库 status=downloaded（FIX-2 状态机第一环）"""
+    import json as _json
+    from app.paper.fetcher import fetch_paper
+    from app.models.database import SessionLocal
+    db = SessionLocal()
+    try:
+        paper = db.get(Paper, paper_id)
+        if paper is None:
+            return
+        try:
+            meta = fetch_paper(arxiv_id)
+            paper.title = meta["title"]
+            paper.authors = _json.dumps(meta["authors"], ensure_ascii=False)
+            paper.abstract = meta["abstract"]
+            paper.pdf_path = meta["pdf_path"]
+            paper.status = "downloaded"
+            db.commit()
+        except Exception as e:
+            paper.status = "failed"
+            paper.last_error = f"{type(e).__name__}: {e}"[:500]
+            db.commit()
+    finally:
+        db.close()
+
+
 @router.post("/arxiv")
-def add_by_arxiv(
+async def add_by_arxiv(
         data:ArxivIn,
+        background_tasks: BackgroundTasks,
         user:dict=Depends(get_current_user),
         db=Depends(get_db),
 )->dict:
-    """给一个 arXiv ID/链接 → 跑完整流水线 → 返回论文信息。
-    全流程：提取ID → fetch(下载PDF) → 查重 → 落库 → parse(解析成md) → split(切片) → 向量化 → indexed(入库)
+    """给一个 arXiv ID/链接 → 登记 + 受理流水线 → 立即返回（FIX-2 后台化）。
+
+    全流程（时间维度）：提取ID → 查重 → 落库(pending) →【立即返回】
+                        后台：downloaded → parsed → indexed（前端轮询看徽章）
     """
     arxiv_id=_extract_arxiv_id(data.arxiv)
 
-    # 去重只看"自己的库"：同一篇论文别人收藏了不影响我再收藏一份
+    # 去重回全局：一份论文全系统一行（共享库语义）
     result=db.scalar(
-        select(Paper).where(Paper.user_id==user["user_id"],Paper.arxiv_id==arxiv_id)
+        select(Paper).where(Paper.arxiv_id==arxiv_id)
     )
     if result:
         # 已有 → 不重复跑流水线，直接告诉调用方
         return {"id": result.id, "title": result.title, "status": result.status, "duplicated": True}
-    from app.paper.fetcher import fetch_paper
-    #下载论文到文件夹内
-    meta=fetch_paper(arxiv_id)
 
-    #落库->pg数据库
+    # 先从输入提取 ID 落一条 pending 记录（前端 1 秒内看到卡片）
     paper=Paper(
-        user_id=user["user_id"],
-        arxiv_id=meta["arxiv_id"],
-        title=meta["title"],
-        authors=json.dumps(meta["authors"], ensure_ascii=False),  # 写侧：列表 → JSON 字符串
-        abstract=meta["abstract"],
-        pdf_path=meta["pdf_path"],
-        status="downloaded",
+        added_by=user["user_id"],
+        arxiv_id=arxiv_id,
+        title=f"arXiv:{arxiv_id}",   # 占位标题，后台 fetch 后覆盖为真实标题
+        authors="[]",
+        abstract=None,
+        pdf_path=None,               # PDF 还没下载，后台任务里补
+        status="pending",
     )
     db.add(paper)
     db.commit()
 
-    #解析论文->pdf格式 + 切片 + 向量化
-    parsed=parse_pdf(paper.pdf_path)
-    chunks=split_paper(text=parsed["text"],headings=parsed["headings"])
-    from app.rag.vector_store import index_paper
-    index_paper(paper_id=paper.id,chunks=chunks)
-    paper.status="indexed"
-    db.commit()
+    # 流水线丢后台：先下载，再解析索引（两段各自推进 status）
+    background_tasks.add_task(_fetch_and_mark_downloaded, paper.id, arxiv_id)
+    background_tasks.add_task(_run_pipeline_background, paper.id, None)
+
     return {**_paper_to_dict(paper),"duplicated":False}
 
 @router.post("/upload")
-def upload_pdf(
+async def upload_pdf(
+        background_tasks: BackgroundTasks,
         file:UploadFile=File(...),
         user:dict=Depends(get_current_user),
         db=Depends(get_db),
 )->dict:
-    """上传本地 PDF：存盘 → 登记 → 补跑完整流水线。
+    """上传本地 PDF：存盘 → 登记(pending) → 立即返回；解析流水线后台跑（FIX-2）。
 
     上传的论文如果只登记不索引，Agent 的 search_paper 永远搜不到它
-    （向量库里没有块）——所以这里把 /arxiv 同款的 parse→split→index
-    三步一起跑完，两种入口（链接/上传）产出一致：status=indexed
+    （向量库里没有块）——流水线在后台把 parse→split→index 跑完，
+    前端轮询 status 看到徽章从"处理中"点亮为"已索引"。
     """
     # 1. 简单校验：只认 .pdf 后缀（魔数校验更严但超出本课范围）
     if not (file.filename or "").lower().endswith(".pdf"):
@@ -156,7 +212,7 @@ def upload_pdf(
     path.write_bytes(file.file.read())
 
     paper=Paper(
-        user_id=user["user_id"],
+        added_by=user["user_id"],
         arxiv_id=None,
         title=Path(file.filename).stem,  # "mamba.pdf" → "mamba"
         authors="[]",
@@ -167,13 +223,8 @@ def upload_pdf(
     db.add(paper)
     db.commit()
 
-    # 3. 补流水线：解析 → 切片 → 向量化 → indexed（和 /arxiv 尾部同款）
-    parsed=parse_pdf(paper.pdf_path)
-    chunks=split_paper(text=parsed["text"],headings=parsed["headings"])
-    from app.rag.vector_store import index_paper
-    index_paper(paper_id=paper.id,chunks=chunks)
-    paper.status="indexed"
-    db.commit()
+    # 3. 流水线丢后台（PDF 已在本地，跳过下载段直接 parse→index）
+    background_tasks.add_task(_run_pipeline_background, paper.id, None)
     return _paper_to_dict(paper)
 
 @router.get("/{paper_id}")
@@ -183,7 +234,7 @@ def get_paper(
         db=Depends(get_db),
 )->dict:
     """查看论文单篇详情。路径参数 paper_id 会自动转 int，传字母 FastAPI 直接 422"""
-    paper = _get_own_paper(db, paper_id, user["user_id"])
+    paper = _get_paper(db, paper_id)
     return _paper_to_dict(paper)
 
 @router.delete("/{paper_id}")
@@ -192,8 +243,8 @@ def delete_papers(
         user:dict=Depends(get_current_user),
         db=Depends(get_db),
 )->dict:
-    """删除论文：PG 一行 + 向量库该论文的所有块 + （暂不删 PDF 文件，课程尾声做清理脚本）"""
-    paper=_get_own_paper(db,paper_id,user["user_id"])
+    """删除论文（全局共享库：任何登录用户可删自己添加的——简化为都可删）：PG 一行 + 向量库该论文的所有块"""
+    paper=_get_paper(db,paper_id)
     #删除向量数据库的论文向量
     vs_delete_paper(paper_id)
     #再删除PG数据库
@@ -201,12 +252,6 @@ def delete_papers(
     db.commit()
     return{"deleted":paper_id}
 
-# ==================== 论文分析接口（PaperDetail 页用） ====================
-# 这两个接口不走 Agent，而是把 tools.py 里已有的两个工具当普通函数直连：
-# 它们本来就是"输入论文ID → 输出结果"的纯函数，没必要绕一圈 function calling。
-# 结果进 Redis 缓存：同一篇论文反复点开详情页，不用每次都烧 LLM。
-# 异步化注：工具函数已是 async（LLM 走 AsyncOpenAI），路由 await 它——
-# 30-60s 的 LLM 生成期间不再占线程池一个线程；同步 DB 小操作保持原样（快）
 
 @router.get("/{paper_id}/summary")
 async def get_paper_summary(
@@ -215,7 +260,7 @@ async def get_paper_summary(
         db=Depends(get_db),
 )->dict:
     """结构化摘要：问题/方法/实验/结论 四段。LLM 生成的结果缓存 1 天。"""
-    _get_own_paper(db,paper_id,user["user_id"])     # 权限闸门：别人的论文 404
+    _get_paper(db, paper_id)   # 存在性校验（全局共享库，无归属检查）
 
     cache_key=f"summary:{paper_id}"
     cached=llm_cache.get_raw(cache_key)
@@ -234,7 +279,7 @@ async def get_paper_citations(
         db=Depends(get_db),
 )->dict:
     """引用关系列表：这篇论文引用了谁、各是什么用途。同样缓存 1 天。"""
-    _get_own_paper(db,paper_id,user["user_id"])
+    _get_paper(db, paper_id)   # 存在性校验
 
     cache_key=f"citations:{paper_id}"
     cached=llm_cache.get_raw(cache_key)

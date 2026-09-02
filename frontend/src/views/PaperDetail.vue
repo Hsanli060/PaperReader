@@ -27,7 +27,7 @@ const SUMMARY_META = [
 ] as const
 
 function askThis() {
-  chatStore.paperScope = paperId
+  chatStore.setScopeIds([paperId])
   router.push('/chat')
 }
 
