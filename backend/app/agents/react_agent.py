@@ -106,6 +106,7 @@ class ReactAgent:
                 # 同一 chunk 可能同时带 content 和 tool_calls —— 两个都处理，别 continue 吞掉
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
+                        # {index:{"id": "", "name": "", "args": ""}}
                         slot = calls.setdefault(tc.index, {"id": "", "name": "", "args": ""})
                         if tc.id:
                             slot["id"] = tc.id
@@ -115,7 +116,6 @@ class ReactAgent:
                             slot["args"] += tc.function.arguments
                         # 新工具首次出现：记下名字，圈结束后按出现顺序直播
                         if tc.index not in new_tool_names:
-                            #{index:{"id": "", "name": "", "args": ""}}
                             new_tool_names.append(tc.index)
 
             content = "".join(content_parts)
