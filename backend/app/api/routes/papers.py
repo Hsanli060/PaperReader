@@ -65,7 +65,7 @@ def list_papers(
     user:dict=Depends(get_current_user),
     db=Depends(get_db),
 )->dict:
-    """分页列出论文库（FIX-3'：全局共享库，全员可见）。
+    """获取论文列表
 
     :return: {"total": 总数, "page": 当前页, "page_size": 每页几条, "items": [...]}
     """
@@ -284,9 +284,15 @@ async def get_paper_citations(
     cache_key=f"citations:{paper_id}"
     cached=llm_cache.get_raw(cache_key)
     if cached:
-        return json.loads(cached)
+        items=json.loads(cached)
+        # 兼容历史毒缓存：旧版本把裸 list 直接写进 Redis，命中时必须包上 items 键，
+        # 否则返回值不是 dict，撞上 -> dict 的 response_model 校验直接 500
+        if isinstance(items, list):
+            items={"items": items}
+        return items
 
     from app.agents.tools import _extract_citations_tool
     citations=await _extract_citations_tool(paper_id)
-    llm_cache.set_raw(cache_key,json.dumps(citations,ensure_ascii=False),ttl_seconds=86400)
+    # 缓存存的就是接口返回的形状 {"items": [...]}——命中路径和生成路径结构永远一致
+    llm_cache.set_raw(cache_key,json.dumps({"items":citations},ensure_ascii=False),ttl_seconds=86400)
     return {"items":citations}

@@ -36,15 +36,32 @@ async def extract_citations(text: str) -> list[dict]:
 
 
 def _parse_citations(raw: str) -> list[dict]:
-    """剥壳逻辑和 summarizer._parse_json_block 相同；prompt 约定输出 {"cited_by_us": [...]}，
-    解析后取出里面的列表，保持 extract_citations 返回 list[dict] 的约定。"""
+    """把模型输出剥成干净的引用列表，怎么抽风都不抛异常（失败返回 []）。
+
+    剥壳顺序和 summarizer._parse_json_block 相同；区别是这里同时接受两种形状：
+      {"cited_by_us": [...]}  ← prompt 约定的输出
+      [{...}, ...]            ← 模型偶尔不听话直接给裸 list
+    :param raw: (str) 模型的原始输出，可能带 ```json 标记、前后废话
+    :return: (list[dict]) 每项 {ref, title, why}；解析不出就 []，绝不抛异常
+    """
     s = raw.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", s, re.S)
     if m:
         s = m.group(1).strip()
-    start, end = s.find("{"), s.rfind("}")   # 最外层是 dict，找 { }
+    # 谁在前按谁剥：裸 list 时 find("{") 会切进第一个元素内部，所以不能只认 {
+    p_obj, p_arr = s.find("{"), s.find("[")
+    if p_obj == -1 or (p_arr != -1 and p_arr < p_obj):
+        start, end = p_arr, s.rfind("]")        # 数组在前（或没有对象）→ 按列表剥
+    else:
+        start, end = p_obj, s.rfind("}")        # 对象在前 → 按 dict 剥
     if start != -1 and end > start:
-        s = s[start:end+1]                   # 含头含尾：+1 才能保住最后的 }
-    d = json.loads(s)
-    # 兜底：模型偶尔不按 prompt 输出裸 list，也能接住
-    return d["cited_by_us"] if isinstance(d, dict) else d
+        s = s[start:end+1]                       # 含头含尾：+1 才能保住最后一个括号
+    try:
+        d = json.loads(s)
+    except ValueError:
+        return []                                # 模型输出废话：端空列表，不炸调用方
+    if isinstance(d, dict):
+        v = d.get("cited_by_us")
+        return v if isinstance(v, list) else []  # 字段缺失/形状不对 → []
+    # 裸 list 兜底；顺手滤掉非 dict 元素，保证"list[dict]"的返回约定
+    return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
