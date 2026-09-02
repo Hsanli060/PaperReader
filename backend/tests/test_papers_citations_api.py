@@ -97,3 +97,47 @@ def test_parse_citations_wrong_field_returns_empty():
     """cited_by_us 字段缺失或不是 list 时返回 []，不让怪形状流到路由"""
     assert _parse_citations('{"other_field": 1}') == []
     assert _parse_citations('{"cited_by_us": "模型抽风输出了字符串"}') == []
+
+
+# ==================== 生成路径：空结果不写缓存 ====================
+
+@pytest.fixture
+def paper3_cache_key():
+    """借用真实存在的 paper 3 跑生成路径（工具被 monkeypatch，不会真调 LLM），测完恢复缓存"""
+    original = _r.get("citations:3")
+    original_ttl = _r.ttl("citations:3")
+    _r.delete("citations:3")
+    yield "citations:3"
+    if original is not None:
+        _r.set("citations:3", original, ex=max(original_ttl, 1))
+    else:
+        _r.delete("citations:3")
+
+
+def test_citations_empty_result_not_cached(paper3_cache_key, monkeypatch):
+    """LLM 提取返回 []：接口 200 {"items": []}，但不写缓存（下次还能重试，空态不被钉死 24h）"""
+    import app.agents.tools as tools
+
+    async def fake_tool(paper_id, allowed_paper_ids=None):
+        return []
+
+    monkeypatch.setattr(tools, "_extract_citations_tool", fake_tool)
+    resp = client.get("/api/papers/3/citations", headers=HEADERS)
+    assert resp.status_code == 200
+    assert resp.json() == {"items": []}
+    assert _r.get(paper3_cache_key) is None, "空结果不该写进缓存"
+
+
+def test_citations_nonempty_result_cached(paper3_cache_key, monkeypatch):
+    """有结果时写入 {"items": [...]} 形状的缓存（和接口返回形状一致）"""
+    import app.agents.tools as tools
+
+    async def fake_tool(paper_id, allowed_paper_ids=None):
+        return [{"ref": "[1]", "title": "T", "why": "W"}]
+
+    monkeypatch.setattr(tools, "_extract_citations_tool", fake_tool)
+    resp = client.get("/api/papers/3/citations", headers=HEADERS)
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["title"] == "T"
+    cached = json.loads(_r.get(paper3_cache_key))
+    assert cached == {"items": [{"ref": "[1]", "title": "T", "why": "W"}]}

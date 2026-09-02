@@ -293,6 +293,9 @@ async def get_paper_citations(
 
     from app.agents.tools import _extract_citations_tool
     citations=await _extract_citations_tool(paper_id)
-    # 缓存存的就是接口返回的形状 {"items": [...]}——命中路径和生成路径结构永远一致
-    llm_cache.set_raw(cache_key,json.dumps({"items":citations},ensure_ascii=False),ttl_seconds=86400)
+    # 空结果不写缓存：LLM 偶尔抽风返回 [] 时下次进详情页还能重试，
+    # 而不是把"没有提取到引用关系"的空态钉死 24 小时
+    if citations:
+        # 缓存存的就是接口返回的形状 {"items": [...]}——命中路径和生成路径结构永远一致
+        llm_cache.set_raw(cache_key,json.dumps({"items":citations},ensure_ascii=False),ttl_seconds=86400)
     return {"items":citations}
