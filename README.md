@@ -56,7 +56,7 @@ cp .env.example .env
 alembic upgrade head
 
 # 启动服务
-python run.py
+uvicorn app.api.main:app --reload
 ```
 
 ### 前端
