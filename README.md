@@ -43,38 +43,11 @@ Agent 核心是一个约 170 行的手写 async ReAct 循环（`backend/app/agen
 
 ## 🚀 快速开始
 
-### 方式一：Docker 一键部署（推荐）
+### 环境准备
 
-```bash
-git clone https://github.com/Hsanli060/PaperReader.git
-cd PaperReader
-
-# 配置环境变量（填 LLM / Embedding API Key）
-cp .env.example .env
-
-# 构建并启动全部 4 个服务（前端 Nginx + 后端 FastAPI + PostgreSQL + Redis）
-docker compose up -d --build
-
-# 国内构建慢可以换源：
-docker compose build \
-  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com
-
-# 打开 http://localhost:8080 即可使用
-```
-
-> 本机端口已占用 5432/6379/8000/8080？在 `.env` 里改 `POSTGRES_PORT`/`REDIS_PORT`/`BACKEND_PORT`/`FRONTEND_PORT` 即可。
->
-> 数据持久化：PostgreSQL 数据在 named volume `pgdata`，PDF 与 Chroma 向量库在 `paper-data`，重建容器不丢。
-
-### 方式二：本地开发
-
-#### 环境要求
-
-- Python >= 3.10
-- Node.js >= 18
-- PostgreSQL
-- Redis
+- Python >= 3.10、Node.js >= 18
+- PostgreSQL、Redis（本机跑起即可）
+- DeepSeek API Key（LLM）、阿里云百炼 API Key（Embedding）
 
 ### 后端
 
@@ -137,7 +110,6 @@ JWT_SECRET=your-secret-key
 ```
 PaperReader/
 ├── backend/
-│   ├── Dockerfile         # 后端镜像（FastAPI）
 │   ├── requirements.txt   # Python 依赖
 │   ├── app/
 │   │   ├── agents/        # 手写 ReAct Agent（function calling 循环 + 记忆窗口）
@@ -150,17 +122,13 @@ PaperReader/
 │   ├── alembic/           # 数据库迁移
 │   └── tests/             # pytest 测试
 ├── frontend/
-│   ├── Dockerfile         # 前端镜像（Node 构建 → Nginx）
-│   ├── nginx.conf         # 静态托管 + /api 反代后端
 │   ├── src/
 │   │   ├── views/         # 页面组件
 │   │   ├── components/    # UI 组件
 │   │   ├── stores/        # Pinia 状态管理
 │   │   └── services/      # axios 请求封装
 │   └── package.json
-├── docker-compose.yml     # 四服务一键编排
-├── .env.example           # 根级环境变量模板（Docker 部署用）
-└── .github/workflows/     # CI（pytest + compose 校验）
+└── README.md
 ```
 
 ## 📝 License
