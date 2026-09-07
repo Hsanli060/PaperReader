@@ -1,0 +1,51 @@
+# ============================================================
+# PaperReader 后端依赖
+# Python >= 3.10
+# ============================================================
+
+# ---- Web 框架 ----
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.18
+pydantic-settings>=2.0.0
+
+# ---- AI / LLM ----
+# Agent 循环为手写 ReAct（openai function calling），未使用 LangChain/LangGraph 框架
+openai>=1.0.0
+tiktoken>=0.8.0
+
+# ---- PDF 解析（学术论文）----
+PyMuPDF>=1.25.0
+pymupdf4llm>=0.0.17
+
+# ---- 向量数据库 ----
+chromadb>=0.6.0
+
+# ---- 数据库（PostgreSQL）----
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+alembic>=1.14.0
+
+# ---- 缓存（Redis）----
+redis>=5.0.0
+
+# ---- 论文抓取 ----
+arxiv>=2.1.0
+httpx>=0.28.0
+
+# ---- 联网搜索（web_search 工具：DuckDuckGo，无需 API key） ----
+ddgs>=9.0.0
+
+# ---- 认证 ----
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# ---- 工具 ----
+python-dotenv>=1.0.0
+aiofiles>=24.1.0
+loguru>=0.7.0
+
+# ---- 测试 ----
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+httpx>=0.28.0
