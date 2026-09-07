@@ -139,5 +139,11 @@ export interface ContentEvent {
   text: string
 }
 
+/** 生成中断/空回答事件：后端流中途出错或 LLM 返回空时显式下发（SSE 头已 200，只能流内报错） */
+export interface StreamErrorEvent {
+  type: 'error'
+  message: string
+}
+
 /** SSE data 行可能的全部形状（联合类型：解析后按 type 收窄） */
-export type SseEvent = ToolCallEvent | ToolResultEvent | ContentEvent
+export type SseEvent = ToolCallEvent | ToolResultEvent | ContentEvent | StreamErrorEvent

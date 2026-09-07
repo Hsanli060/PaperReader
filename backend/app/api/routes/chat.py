@@ -7,6 +7,7 @@ SSE 事件协议（前端唯一要认的格式）：
       {"type":"content",     "text": "..."}          回答文本片段（打字机）
       {"type":"tool_call",   "name":..., "arguments":"{...json}"}  模型申请调工具
       {"type":"tool_result", "name":..., "summary": "..."}     工具执行完成摘要
+      {"type":"error",       "message":"..."}        生成中断/空回答（前端显示 ⚠️ 进气泡）
     自定义头 X-Conversation-Id：新会话时把后端分配的会话 ID 告诉前端
 
 FIX-4 注：
@@ -21,6 +22,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, Depends, Response
+from loguru import logger
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy import select, func
@@ -134,20 +136,41 @@ async def chat(
                 yield {"event": "message",
                        "data": json.dumps(event, ensure_ascii=False)}
 
-            # 5. 流正常结束：落库（to_thread 包同步操作）
+            # 5. 流正常结束：落库（to_thread 包同步操作）。
+            #    空回答不落库——否则历史里留下"幽灵空泡"，刷新永远回放空白
             full_answer = "".join(answer_parts)
-            await asyncio.to_thread(_persist, full_answer)
-            persisted = True
+            if full_answer.strip():
+                await asyncio.to_thread(_persist, full_answer)
+                persisted = True
+            else:
+                # 空流（大概率 LLM API 抽风）：SSE 头早已 200，没法改状态码，
+                # 只能在流里显式发 error 事件——不吭声的话前端就是个无声的空白气泡
+                logger.warning(f"chat 空回答 conversation_id={conversation_id}")
+                yield {"event": "message",
+                       "data": json.dumps({"type": "error",
+                                           "message": "模型没有返回内容（LLM 服务可能抖了一下），请重发一次"},
+                                          ensure_ascii=False)}
+        except Exception as e:
+            # 流中途炸了（LLM 网络错误等）：同样只能在流里报错，让前端气泡显示 ⚠️
+            logger.exception(f"chat 流中断 conversation_id={conversation_id}")
+            try:
+                yield {"event": "message",
+                       "data": json.dumps({"type": "error",
+                                           "message": f"生成中断：{e}"},
+                                          ensure_ascii=False)}
+            except Exception:
+                pass  # 客户端已经断开，error 事件也发不出去，算了
         finally:
             # 客户端中途断连（点停止生成/关页面）时，async 生成器被 close，
             # GeneratorExit 在这里被接住——把"已生成部分"落库，数据库无脏数据。
             # 缓存只在完整回答时写（断连的部分答案不值得缓存）
             if not persisted:
                 partial = "".join(answer_parts)
-                try:
-                    await asyncio.to_thread(_persist, partial)
-                except Exception:
-                    pass  # 断连收尾尽力而为，别再抛错打扰日志
+                if partial.strip():   # 空串不落库（防幽灵空泡）
+                    try:
+                        await asyncio.to_thread(_persist, partial)
+                    except Exception:
+                        pass  # 断连收尾尽力而为，别再抛错打扰日志
 
     return EventSourceResponse(agen(), headers={"X-Conversation-Id": conv_id_str}, sep="\n")
 

@@ -100,6 +100,10 @@ export const useChatStore = defineStore('chat', {
               const list = bubble.toolCalls ?? []
               const last = [...list].reverse().find((t) => t.name === ev.name && !t.resultSummary)
               if (last) last.resultSummary = ev.summary
+            } else if (ev.type === 'error') {
+              // 后端流中断/空回答：显式错误进气泡。SSE 头早已 200，fetch 不会自己抛错，
+              // 不接这个事件的话用户看到的就是无声的空白气泡（踩过的坑）
+              bubble.content += (bubble.content ? '\n\n' : '') + `⚠️ ${ev.message}`
             }
           },
           respHeaders,
