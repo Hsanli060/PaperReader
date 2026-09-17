@@ -29,6 +29,6 @@ backend/probe.log
 CLAUDE.md
 CLAUDE_APPEND.md
 
-# 一次性脚本与备份
-backend/scripts/
+# 备份（不进仓库）
+# 注：backend/scripts/ 于 2026-09-16 放行——内含可复跑评测/演示脚本（eval/bench/audit/race/pool），需随仓库提交
 backups/

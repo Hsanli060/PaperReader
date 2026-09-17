@@ -7,6 +7,8 @@ Agent 工具注册表：函数 + JSON Schema + dispatch
       LLM 调用走 chat_once（AsyncOpenAI）直接 await
     - dispatch 也是 async def：react_agent 直接 await，papers.py 路由 await 后
       LLM 调用不再占线程池
+    - 服务端参数注入：会话 scope / 任务清单实例经 dispatch 按函数签名 inspect
+      注入，LLM 的 schema 里看不到（安全模式）
     - 出错不抛异常的老规矩不变：错误说明文字端回去，模型下轮自我修正
 """
 
@@ -17,6 +19,8 @@ from app.rag.retriever import search as rag_search
 from app.services.web_search import web_search as _web_search
 from app.paper.summarizer import summarize_paper
 from app.paper.citation import extract_citations
+from app.rag.pipeline import advanced_search
+from app.agents.todo import TodoManager
 
 
 async def _search_paper(query: str, paper_id: int | None = None,
@@ -29,24 +33,25 @@ async def _search_paper(query: str, paper_id: int | None = None,
         传入时检索被强制圈在这些论文里；paper_id 越出 scope 会被拒绝
     :return: list[dict]，给模型看的瘦身版检索结果
     """
+
     # scope 安全校验：LLM 传的 paper_id 必须落在服务端圈定的范围内
     if allowed_paper_ids is not None and paper_id is not None and paper_id not in allowed_paper_ids:
         raise ValueError(f"paper_id={paper_id} 不在当前问答范围内（范围：{allowed_paper_ids}），请改用范围内的论文 ID")
-    # rag_search 是同步的（内含 embedding API 网络调用 + ChromaDB 查询），
-    # 按铁律 to_thread 丢线程池，检索期间事件循环继续服务其他请求
-    hits = await asyncio.to_thread(
-        rag_search, query,
+    # 改写 → 双路召回 → RRF → 精排。
+    # 内部已经用 to_thread 包住同步的召回段，这里直接 await 即可。
+    hits = await advanced_search(
+        query,
         paper_id=paper_id, paper_ids=allowed_paper_ids,
     )
     return [
         {
             "paper_id": h["paper_id"],
             "section": h["section"],
-            "distance": round(h["distance"], 3),
+            "distance": round(h["distance"], 3),  # 保留：test_agent.py 断言了这个键
+            "rerank_score": round(h.get("rerank_score", 0.0), 3),  # 精排分 0~1，越高越贴题
             "text": h["text"],
         } for h in hits
     ]
-
 
 async def _web_search_tool(query: str, max_results: int = 5) -> list[dict]:
     """联网搜索：知识库里查不到的外部信息（最新进展/代码仓库/作者信息）。
@@ -89,6 +94,19 @@ async def _extract_citations_tool(paper_id: int,
         raise ValueError(f"向量库里没有 paper_id={paper_id} 的内容，请先运行流水线索引该论文")
     text = "\n\n".join(h["text"] for h in hits)
     return await extract_citations(text)        # AsyncOpenAI，非阻塞等待
+
+
+async def _todo_write_tool(todos, todo_state: TodoManager | None = None) -> str:
+    """任务清单：创建/更新本次运行的执行计划（多步问题时用）。
+
+    :param todos: (list|str) 完整清单 [{content, status}, ...]——整体替换，不是增量
+    :param todo_state: (TodoManager|None) 每运行实例，由 react_agent 经 dispatch 注入
+        （inspect 按需注入，LLM 的 schema 里看不到它）；直接调用时退化为一次性清单
+    :return: (str) 渲染后的清单文本（[ ] 待办 / [>] 进行中 / [x] 已完成）
+        ——字符串结果由 dispatch 直接透传，不再包一层 JSON
+    """
+    manager = todo_state if todo_state is not None else TodoManager()
+    return manager.update(todos)
 
 
 # 工具列表及说明书
@@ -178,6 +196,38 @@ TOOLS_SCHEMA: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_write",
+            "description": "创建/更新本次任务的执行计划清单。当问题需要多步完成时"
+                          "（跨论文对比、多部分综述、用户明确要求分步），先列出全部步骤"
+                          "（pending），再边做边更新状态（in_progress / completed）。"
+                          "简单问题（单点查询、闲聊）不要使用",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string", "description": "步骤描述"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"],
+                                    "description": "待办 / 进行中 / 已完成；同一时间最多一项 in_progress",
+                                },
+                            },
+                            "required": ["content", "status"],
+                        },
+                    },
+                },
+                "required": ["todos"],
+            },
+        },
+    },
 ]
 
 # 封装所有工具到一个字典中方便查询
@@ -186,33 +236,39 @@ TOOLS_IMPLS: dict = {
     "web_search": _web_search_tool,
     "summarize_paper": _summarize_paper_tool,
     "extract_citations": _extract_citations_tool,
+    "todo_write": _todo_write_tool,
 }
 
 
 async def dispatch(name: str, arguments: str,
-                   allowed_paper_ids: list[int] | None = None) -> str:
-    """执行一次工具调用（异步版）：找到工具 → 解析参数 → await 调用 → 结果转 JSON 字符串。
+                   allowed_paper_ids: list[int] | None = None,
+                   todo_state: TodoManager | None = None) -> str:
+    """执行一次工具调用（异步版）：找到工具 → 解析参数 → await 调用 → 结果转文本。
 
     :param name: (str) 模型要调用的工具名，如 "search_paper"
     :param arguments: (str) 模型给的参数，实测是 JSON 字符串如 '{"query": "..."}'，不是 dict
     :param allowed_paper_ids: (list[int]|None) 会话 scope（服务端注入，LLM 不可见）。
         只注入给声明了该参数的工具——web_search 等无 scope 概念的工具不收
-    :return: (str) 工具结果的 JSON 字符串；出错时不抛异常，
-        而是返回错误说明文字 —— 模型下轮读到会自己修正参数重试，
-        比直接崩掉主循环好
+    :param todo_state: (TodoManager|None) 任务清单实例（react_agent 每运行注入给 todo_write）
+    :return: (str) 工具结果文本：字符串结果直接透传（如 todo 清单渲染文本），
+        其余统一 JSON 序列化；出错时不抛异常，而是返回错误说明文字 ——
+        模型下轮读到会自己修正参数重试，比直接崩掉主循环好
     """
     tool = TOOLS_IMPLS.get(name)
     if tool is None:
         return f"错误：没有叫 {name!r} 的工具，可用工具：{list(TOOLS_IMPLS)}"
     try:
         args = json.loads(arguments) if arguments else {}     # 反序列化参数
-        # scope 注入：只有函数签名里有 allowed_paper_ids 的工具才收
-        # （inspect 按需注入，不污染无 scope 概念的工具）
-        if allowed_paper_ids is not None:
-            import inspect as _inspect
-            if "allowed_paper_ids" in _inspect.signature(tool).parameters:
-                args["allowed_paper_ids"] = allowed_paper_ids
+        # 服务端按需注入：只有函数签名里声明了对应参数的工具才收（inspect 检查，
+        # 不污染无关工具）。scope 给检索类工具；todo_state 给 todo_write
+        import inspect as _inspect
+        params = _inspect.signature(tool).parameters
+        if allowed_paper_ids is not None and "allowed_paper_ids" in params:
+            args["allowed_paper_ids"] = allowed_paper_ids
+        if todo_state is not None and "todo_state" in params:
+            args["todo_state"] = todo_state
         result = await tool(**args)
-        return json.dumps(result, ensure_ascii=False)
+        # 字符串结果直接透传（如 todo 清单渲染文本）；其余统一 JSON 序列化
+        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
     except Exception as e:
         return f"工具执行失败：{type(e).__name__}: {e}，请检查参数后重试"

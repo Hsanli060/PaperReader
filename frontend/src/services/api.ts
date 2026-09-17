@@ -12,7 +12,7 @@
  */
 
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios'
-import type { SseEvent } from '@/types'
+import type { KeysTestResponse, SseEvent, UserKeysStatus } from '@/types'
 
 // ---------- 1. axios 实例 ----------
 
@@ -77,6 +77,30 @@ http.interceptors.response.use(
   },
 )
 
+// ---------- 1.5 结构化错误：未配置 API Key（批①） ----------
+
+/** 未配置 API Key 的结构化错误（SSE 通道抛它；axios 通道用 noApiKeyInfo 识别） */
+export class NoApiKeyError extends Error {
+  missing: string[]
+  constructor(message: string, missing: string[]) {
+    super(message)
+    this.name = 'NoApiKeyError'
+    this.missing = missing
+  }
+}
+
+/** 从任意错误里识别"未配置 API Key"（axios 错误与 NoApiKeyError 都认） */
+export function noApiKeyInfo(err: unknown): { missing: string[] } | null {
+  if (err instanceof NoApiKeyError) return { missing: err.missing }
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as { detail?: { code?: string; missing?: string[] } } | undefined
+    if (err.response?.status === 409 && data?.detail?.code === 'NO_API_KEY') {
+      return { missing: data.detail.missing ?? [] }
+    }
+  }
+  return null
+}
+
 // ---------- 2. SSE（POST 版） ----------
 
 /**
@@ -112,13 +136,19 @@ export async function ssePost(
     signal,
   })
 
-  // 流式接口的错误（如 401/404）不会走 axios 拦截器，这里手工处理
+  // 流式接口的错误（如 401/404/409）不会走 axios 拦截器，这里手工处理
   if (!resp.ok) {
     let message = `HTTP ${resp.status}`
+    let detail: { code?: string; missing?: string[] } | undefined
     try {
       const errJson = await resp.json()
       message = errJson.message ?? message
+      detail = errJson.detail
     } catch { /* 响应体不是 JSON 就用默认消息 */ }
+    // 批①：未配置 API Key —— 抛结构化错误，调用方据此引导到设置页
+    if (resp.status === 409 && detail?.code === 'NO_API_KEY') {
+      throw new NoApiKeyError(message, Array.isArray(detail.missing) ? detail.missing : [])
+    }
     throw new Error(message)
   }
 
@@ -167,4 +197,31 @@ export function apiErrorMessage(err: unknown): string {
   }
   if (err instanceof Error) return err.message
   return '未知错误'
+}
+
+// ---------- 4. 用户 API Key（批①：自带 Key） ----------
+
+/** 查看我的 Key 配置状态（后端只返回尾号） */
+export function fetchMyKeys() {
+  return http.get<UserKeysStatus>('/user/keys')
+}
+
+/** 保存/清除：字段缺省=不动；空串=清除；非空=保存（key 加密；base_url 明文） */
+export function saveMyKeys(payload: {
+  llm_api_key?: string
+  embedding_api_key?: string
+  llm_base_url?: string
+  embedding_base_url?: string
+}) {
+  return http.put<UserKeysStatus>('/user/keys', payload)
+}
+
+/** 测试 Key 有效性：传值测传的，不传测已保存的（地址可一并传入，测完不落库） */
+export function testMyKeys(payload: {
+  llm_api_key?: string
+  embedding_api_key?: string
+  llm_base_url?: string
+  embedding_base_url?: string
+} = {}) {
+  return http.post<KeysTestResponse>('/user/keys/test', payload)
 }

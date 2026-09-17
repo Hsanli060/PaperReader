@@ -21,11 +21,15 @@ papers_col=_client.get_or_create_collection(
 
 EMBED_BATCH = 16  # 每批发给 embedding 服务的条数（实测 20 条 OK，留点余量）
 
-def index_paper(paper_id:int,chunks:list[dict])->int:
+def index_paper(paper_id:int,chunks:list[dict],api_key:str|None=None,
+                base_url:str|None=None)->int:
     """把一篇论文的全部块写入向量库，返回入库块数。
 
     :param paper_id: 论文ID
     :param chunks: 切片后的论文块
+    :param api_key: (str|None) 嵌入 key（批①：后台流水线显式传"添加者自己的 key"；
+        None=当前请求上下文 → .env 默认）
+    :param base_url: (str|None) 嵌入服务地址（同上：显式 → 上下文 → .env 默认）
     :return:向量的长度
     """
     delete_paper(paper_id)
@@ -41,7 +45,7 @@ def index_paper(paper_id:int,chunks:list[dict])->int:
     vectors: list[list[float]] = []
     for start in range(0,len(documents),EMBED_BATCH):
         batch=documents[start:start+EMBED_BATCH]
-        vectors.extend(embed(batch))
+        vectors.extend(embed(batch, api_key=api_key, base_url=base_url))
 
     papers_col.add(
         ids=ids,        #主键ID

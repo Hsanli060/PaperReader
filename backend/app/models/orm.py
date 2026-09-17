@@ -1,14 +1,16 @@
 """
 ORM 表定义
-表关系（FIX-3' NotebookLM 式共享库改造后）：
+表关系（批②"用户库归属"改造后）：
     User 1 ──── n Conversation   一个用户有多个会话（会话历史仍按用户隔离）
-    Paper：全局共享——一份论文全系统只有一行、一份向量（added_by 记录谁添加的）
+    Paper：全局只存一份（一行 + 一份向量；added_by 记录谁先添加的）
+    User n ── m Paper            归属关系（user_papers）：谁把这篇加进了自己的库，谁可见；
+                                 重复添加 = 只加一行归属，不重跑下载/向量化
     Conversation n ── m Paper    会话的问答范围（scope）由 conversation_papers 连接表圈定
     Conversation 1 ── n Message  一个会话包含多条消息
 """
 
 from datetime import datetime
-from sqlalchemy import String,Text,Integer,ForeignKey,DateTime,UniqueConstraint,Table,Column,func
+from sqlalchemy import String,Text,Integer,ForeignKey,DateTime,UniqueConstraint,Table,Column,func,Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # Base 定义在 database.py（基建层），这里只做"用基建的人"，避免出现两份 Base
@@ -21,9 +23,26 @@ class User(Base):
     id:Mapped[int]=mapped_column(Integer,primary_key=True,autoincrement=True)
     username:Mapped[str]=mapped_column(String(50),unique=True,nullable=False)
     password_hash:Mapped[str]=mapped_column(String(255),nullable=False)
+    # 用户自带 API Key：Fernet 密文存储、永不落明文（实现见 services/user_keys.py）
+    llm_api_key:Mapped[str|None]=mapped_column(Text)
+    embedding_api_key:Mapped[str|None]=mapped_column(Text)
+    # 自带服务地址（OpenAI 兼容端点，非机密、明文存储）：留空=用服务器默认
+    llm_base_url:Mapped[str|None]=mapped_column(Text)
+    embedding_base_url:Mapped[str|None]=mapped_column(Text)
     created_at:Mapped[datetime]=mapped_column(DateTime,server_default=func.now())
 
     conversations:Mapped[list["Conversation"]]=relationship(back_populates="user")
+
+
+# 用户 × 论文 多对多连接表：论文的"归属关系"（批②：谁把这篇加进了自己的库）
+# 全局仍只存一份论文一份向量；可见性（列表/scope/Agent 检索/删除）全按成员过滤。
+user_papers = Table(
+    "user_papers",
+    Base.metadata,
+    Column("user_id", ForeignKey("users.id"), primary_key=True),
+    Column("paper_id", ForeignKey("papers.id"), primary_key=True),
+    Column("added_at", DateTime, server_default=func.now()),
+)
 
 
 class Paper(Base):
@@ -31,7 +50,7 @@ class Paper(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     arxiv_id:Mapped[str | None]=mapped_column(String(64),index=True,unique=True)
-    added_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)  # 署名：谁添加的（展示用，不做隔离）
+    added_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)  # 署名：谁添加的
     title: Mapped[str] = mapped_column(Text, nullable=False)
     authors: Mapped[str] = mapped_column(Text)  # 存 JSON 字符串，如 '["Alice","Bob"]'
     abstract: Mapped[str | None] = mapped_column(Text)
@@ -69,9 +88,13 @@ class Conversation(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+    # 复合索引：会话详情/聊天回放的查询形态是"WHERE conversation_id=? ORDER BY id"，
+    # (conversation_id, id) 让过滤+排序一条索引全包（消掉 Sort 节点）；
+    # 原单列索引是复合索引的前缀、被完全覆盖，由 migration 删除
+    __table_args__ = (Index("ix_messages_conversation_id_id", "conversation_id", "id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"))
     role: Mapped[str] = mapped_column(String(20))  # "user" / "assistant"
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -37,6 +37,12 @@ const router = createRouter({
       component: () => import('@/views/History.vue'),
       meta: { requiresLogin: true },
     },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/views/Settings.vue'),
+      meta: { requiresLogin: true },
+    },
     // 兜底：任何没匹配的路径回聊天页
     { path: '/:pathMatch(.*)*', redirect: '/chat' },
   ],

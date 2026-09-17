@@ -17,7 +17,7 @@ const router = useRouter()
 
 const keyword = ref('')
 const busy = ref(false)          // 添加/上传进行中（整个操作条转圈防重复提交）
-const banner = ref<{ type: 'ok' | 'err'; text: string } | null>(null)
+const banner = ref<{ type: 'ok' | 'err'; text: string; toSettings?: boolean } | null>(null)
 
 onMounted(() => paperStore.fetchPage())
 
@@ -44,7 +44,8 @@ async function onAddArxiv(input: string) {
   busy.value = true
   banner.value = null
   const result = await paperStore.addByArxiv(input)
-  banner.value = { type: result.ok ? 'ok' : 'err', text: result.message }
+  // 批①：没配 Key 的错误 —— 横幅可点击直达设置页
+  banner.value = { type: result.ok ? 'ok' : 'err', text: result.message, toSettings: !result.ok && result.noKey }
   busy.value = false
 }
 
@@ -52,7 +53,7 @@ async function onUpload(file: File) {
   busy.value = true
   banner.value = null
   const result = await paperStore.uploadPdf(file)
-  banner.value = { type: result.ok ? 'ok' : 'err', text: result.message }
+  banner.value = { type: result.ok ? 'ok' : 'err', text: result.message, toSettings: !result.ok && result.noKey }
   busy.value = false
 }
 
@@ -79,7 +80,12 @@ function toChat(id: number) {
       <FileUploader :disabled="busy" @add-arxiv="onAddArxiv" @upload="onUpload" />
     </div>
 
-    <div v-if="banner" class="banner" :class="banner.type">{{ banner.text }}</div>
+    <div
+      v-if="banner"
+      class="banner"
+      :class="[banner.type, { clickable: banner.toSettings }]"
+      @click="banner.toSettings && router.push('/settings')"
+    >{{ banner.text }}{{ banner.toSettings ? '（点此去设置）' : '' }}</div>
 
     <div class="filter-row">
       <input v-model="keyword" class="search-input" placeholder="🔍 搜索标题 / 作者 / arXiv ID" />
@@ -88,7 +94,7 @@ function toChat(id: number) {
 
     <div v-if="paperStore.loading" class="loading">加载中…</div>
     <div v-else-if="!filtered.length" class="empty">
-      {{ keyword ? '没有匹配的论文' : '库里还没有论文 —— 上面粘贴 arXiv 链接添加第一篇吧' }}
+      {{ keyword ? '没有匹配的论文' : '你的论文库还是空的 —— 上面粘贴 arXiv 链接添加第一篇吧' }}
     </div>
     <div v-else class="card-grid">
       <PaperCard
@@ -121,6 +127,7 @@ function toChat(id: number) {
 }
 .banner.ok { background: #eefaf5; color: #0a7d4f; border: 1px solid #bfe8d6; }
 .banner.err { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+.banner.clickable { cursor: pointer; text-decoration: underline dotted; }
 
 .filter-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .search-input {

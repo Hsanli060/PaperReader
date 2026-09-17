@@ -13,9 +13,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 # 自定义业务异常：业务代码里想报错就 raise AppException("用户名已存在", 409)
 # 它不继承 HTTPException——故意的，业务错误和 HTTP 语义错误分开，互不干扰
 class AppException(Exception):
-    def __init__(self,message:str,status:int=400):
+    def __init__(self,message:str,status:int=400,detail=None):
         self.message=message        #错误信息
         self.status=status          #HTTP 状态码
+        self.detail=detail          #可选结构化补充（如 {"code":"NO_API_KEY"}，给前端做机器判断）
 
 def _json_error(status:int,message:str,detail=None)->JSONResponse:
     return JSONResponse(
@@ -26,7 +27,7 @@ def _json_error(status:int,message:str,detail=None)->JSONResponse:
 # ----  4 个 handler，分别兜 4 种情况 ----
 async def app_exception_handler(request:Request,exc:AppException):
     """情况1：业务代码主动 raise AppException（预期内的错误）"""
-    return _json_error(exc.status,exc.message)
+    return _json_error(exc.status,exc.message,exc.detail)
 
 async def http_exception_handler(request:Request,exc:StarletteHTTPException):
     """情况2：框架抛出的 HTTP 语义错误（404 找不到路径、405 方法不对等）。"""

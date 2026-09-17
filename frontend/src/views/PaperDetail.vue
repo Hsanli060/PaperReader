@@ -63,7 +63,9 @@ function back() {
           </div>
         </div>
         <div v-else-if="paperStore.summaryLoading" class="loading">正在从向量库抓内容并生成摘要…</div>
-        <div v-else class="empty-hint">摘要生成失败（向量库里可能还没有这篇论文的内容）</div>
+        <div v-else class="empty-hint">
+          {{ paperStore.summaryError ?? '摘要生成失败（向量库里可能还没有这篇论文的内容）' }}
+        </div>
       </div>
 
       <!-- 引用图 + 引用列表 -->

@@ -5,7 +5,7 @@
  * FIX-2：添加后后台流水线轮询——pending/downloaded/parsed → indexed 前每 3 秒查一次 status。
  */
 import { defineStore } from 'pinia'
-import { http, apiErrorMessage } from '@/services/api'
+import { http, apiErrorMessage, noApiKeyInfo } from '@/services/api'
 import type { Paper, PaperPage, PaperSummary, Citation } from '@/types'
 
 export const usePaperStore = defineStore('paper', {
@@ -22,6 +22,8 @@ export const usePaperStore = defineStore('paper', {
 
     /** 详情页的摘要四段（null=还没生成/加载失败） */
     summary: null as PaperSummary | null,
+    /** 摘要加载失败的原因说明（批①：没配 Key 时给引导文案；null=普通失败） */
+    summaryError: null as string | null,
     summaryLoading: false,
 
     /** 详情页的引用列表 */
@@ -94,12 +96,12 @@ export const usePaperStore = defineStore('paper', {
     },
 
     /** 按 arXiv ID/链接添加。返回错误文案或 null；duplicated=true 时后端不重复跑流水线 */
-    async addByArxiv(input: string): Promise<{ ok: boolean; message: string }> {
+    async addByArxiv(input: string): Promise<{ ok: boolean; message: string; noKey?: boolean }> {
       try {
         const resp = await http.post('/papers/arxiv', { arxiv: input })
         if (resp.data.duplicated) {
           await this.fetchPage(1)
-          return { ok: true, message: '该论文已在库里，已为你定位' }
+          return { ok: true, message: '该论文已在库中——已加入你的论文库' }
         }
         // 非重复：后端立即返回 pending，新论文插到列表头
         await this.fetchPage(1)
@@ -108,12 +110,12 @@ export const usePaperStore = defineStore('paper', {
         if (newId) this.startPolling(newId)
         return { ok: true, message: '已受理，后台正在处理（3秒后自动刷新状态）' }
       } catch (err) {
-        return { ok: false, message: apiErrorMessage(err) }
+        return { ok: false, message: apiErrorMessage(err), noKey: !!noApiKeyInfo(err) }
       }
     },
 
     /** 上传本地 PDF（后端后台跑 parse→split→index 流水线，前端轮询看进度） */
-    async uploadPdf(file: File): Promise<{ ok: boolean; message: string }> {
+    async uploadPdf(file: File): Promise<{ ok: boolean; message: string; noKey?: boolean }> {
       const form = new FormData()
       form.append('file', file)
       try {
@@ -126,7 +128,7 @@ export const usePaperStore = defineStore('paper', {
         if (newId) this.startPolling(newId)
         return { ok: true, message: '上传成功，后台正在解析（3秒后自动刷新状态）' }
       } catch (err) {
-        return { ok: false, message: apiErrorMessage(err) }
+        return { ok: false, message: apiErrorMessage(err), noKey: !!noApiKeyInfo(err) }
       }
     },
 
@@ -134,6 +136,7 @@ export const usePaperStore = defineStore('paper', {
     async openDetail(paperId: number): Promise<void> {
       this.current = null
       this.summary = null
+      this.summaryError = null
       this.citations = []
       this.summaryLoading = true
       this.citationsLoading = true
@@ -145,7 +148,13 @@ export const usePaperStore = defineStore('paper', {
       // 摘要和引用独立拉（两个都是 LLM 慢接口，各自转圈互不阻塞）
       http.get(`/papers/${paperId}/summary`)
         .then((resp) => { this.summary = resp.data })
-        .catch(() => { this.summary = null })
+        .catch((err) => {
+          this.summary = null
+          // 批①：没配 API Key 时给明确引导（不然界面会误报"生成失败"）
+          this.summaryError = noApiKeyInfo(err)
+            ? '尚未配置 API Key——请到右上角「设置」页配置你自己的 Key 后再查看摘要'
+            : null
+        })
         .finally(() => { this.summaryLoading = false })
 
       http.get<{ items: Citation[] }>(`/papers/${paperId}/citations`)

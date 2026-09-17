@@ -52,6 +52,7 @@ function logout() {
       </nav>
       <div class="user-box">
         <span class="username">{{ userStore.username }}</span>
+        <button class="settings-btn" @click="router.push('/settings')">设置</button>
         <button class="logout-btn" @click="logout">退出</button>
       </div>
     </header>
@@ -100,4 +101,13 @@ function logout() {
   cursor: pointer;
 }
 .logout-btn:hover { border-color: #dc2626; color: #dc2626; }
+.settings-btn {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
 </style>

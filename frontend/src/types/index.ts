@@ -147,3 +147,31 @@ export interface StreamErrorEvent {
 
 /** SSE data 行可能的全部形状（联合类型：解析后按 type 收窄） */
 export type SseEvent = ToolCallEvent | ToolResultEvent | ContentEvent | StreamErrorEvent
+
+// ---------- 用户设置（批①：自带 API Key） ----------
+
+/** 单个 provider 的 key 配置状态（key 只回尾号；base_url 非机密、可回显） */
+export interface KeyStatus {
+  configured: boolean
+  tail: string | null
+  /** 自带服务地址（OpenAI 兼容端点）；null=未设置，用服务端默认 */
+  base_url: string | null
+}
+
+/** GET /api/user/keys 的返回 */
+export interface UserKeysStatus {
+  llm: KeyStatus
+  embedding: KeyStatus
+}
+
+/** 单项 key 的测试结果 */
+export interface KeyTestResult {
+  ok: boolean
+  error?: string
+}
+
+/** POST /api/user/keys/test 的返回（两个 provider 各自独立） */
+export interface KeysTestResponse {
+  llm: KeyTestResult
+  embedding: KeyTestResult
+}

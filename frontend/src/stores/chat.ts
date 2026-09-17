@@ -10,7 +10,7 @@
  */
 
 import { defineStore } from 'pinia'
-import { ssePost, http } from '@/services/api'
+import { ssePost, http, apiErrorMessage, noApiKeyInfo } from '@/services/api'
 import type { ChatMessage, Conversation, ConversationDetail, ToolCallInfo } from '@/types'
 
 export const useChatStore = defineStore('chat', {
@@ -119,7 +119,13 @@ export const useChatStore = defineStore('chat', {
         const bubble = this.messages[this.messages.length - 1]
         if (!aborted && bubble.role === 'assistant') {
           // 真错误（非用户主动停止）：把错误显示在气泡里，不让界面静默失败
-          bubble.content += (bubble.content ? '\n\n' : '') + `⚠️ ${err instanceof Error ? err.message : '请求失败'}`
+          if (noApiKeyInfo(err)) {
+            // 批①：没配 API Key —— 气泡里给明确引导（不静默、也不冒充普通网络错误）
+            bubble.content += (bubble.content ? '\n\n' : '') +
+              `🔑 ${apiErrorMessage(err)}\n\n配置完成后，回来重新发送即可。`
+          } else {
+            bubble.content += (bubble.content ? '\n\n' : '') + `⚠️ ${err instanceof Error ? err.message : '请求失败'}`
+          }
         }
       } finally {
         const bubble = this.messages[this.messages.length - 1]

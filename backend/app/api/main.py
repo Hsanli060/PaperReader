@@ -18,6 +18,8 @@ from app.middleware.logging import LoggingMiddleware
 from app.middleware.error_handler import register_error_handlers
 from app.api.routes.auth import router as auth_router
 from app.api.routes.papers import router as papers_router
+from app.api.routes.user import router as user_router
+from app.services.cache import llm_cache
 
 app=FastAPI(
     title=settings.APP_NAME,
@@ -43,10 +45,11 @@ register_error_handlers(app)
 # ---- 路由挂载（prefix 统一用 config 里的 /api，一次就够，别重复挂）----
 app.include_router(auth_router,prefix=settings.API_PREFIX)
 app.include_router(papers_router,prefix=settings.API_PREFIX)
+app.include_router(user_router,prefix=settings.API_PREFIX)
 app.include_router(chat_router,prefix=settings.API_PREFIX)
 
 # ---- 健康检查 ----
 @app.get("/api/health")
 def health():
-    """运维惯用：浏览器访问一下就知道后端活没活着。"""
-    return {"status": "ok"}
+    """运维惯用：浏览器访问一下就知道后端活没活着。cache 键=缓存观测计数（只加键，不动 status）。"""
+    return {"status": "ok", "cache": llm_cache.stats()}

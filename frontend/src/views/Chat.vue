@@ -89,13 +89,13 @@ function fmtTime(s: string) {
         <div class="scope-label">问答范围 <span v-if="scopeIds.length" class="scope-count">已选 {{ scopeIds.length }}</span></div>
         <label class="scope-item">
           <input type="checkbox" :checked="scopeIds.length === 0" @change="clearScope()" />
-          全库检索
+          全库检索（我的论文库）
         </label>
         <label v-for="p in paperStore.items" :key="p.id" class="scope-item">
           <input type="checkbox" :checked="scopeIds.includes(p.id)" @change="toggleScope(p.id)" />
           <span class="scope-title" :title="p.title">{{ p.title.slice(0, 28) }}{{ p.title.length > 28 ? '…' : '' }}</span>
         </label>
-        <div v-if="!paperStore.items.length" class="scope-empty">论文库为空</div>
+        <div v-if="!paperStore.items.length" class="scope-empty">你的论文库为空——先去「论文库」添加</div>
       </div>
       <div class="conv-list">
         <div
